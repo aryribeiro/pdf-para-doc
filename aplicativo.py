@@ -1,18 +1,26 @@
+import PyPDF2
 import streamlit as st
-from pdf2docx import Converter
+from docx import Document
 from io import BytesIO
 
-def pdf_to_docx(pdf_file):
-    """Converte um arquivo PDF para DOCX com a manutenção da formatação."""
-    # Criando um conversor pdf2docx
-    cv = Converter(pdf_file)
+def pdf_to_text(pdf_file):
+    """Extrai o texto de um arquivo PDF."""
+    pdf_reader = PyPDF2.PdfReader(pdf_file)
+    text = ""
+    for page_num in range(len(pdf_reader.pages)):
+        page = pdf_reader.pages[page_num]
+        text += page.extract_text()
+    return text
+
+def text_to_docx(text):
+    """Converte o texto extraído para um arquivo DOCX em memória."""
+    doc = Document()
+    doc.add_paragraph(text)
     
-    # Criando um arquivo DOCX em memória
+    # Salvar o documento em memória com BytesIO
     docx_buffer = BytesIO()
-    cv.convert(docx_buffer, start=0, end=None)  # Converte o PDF para o arquivo DOCX
-    cv.close()
-    
-    docx_buffer.seek(0)  # Retorna ao início do arquivo em memória
+    doc.save(docx_buffer)
+    docx_buffer.seek(0)  # Voltar para o início do arquivo em memória
     return docx_buffer
 
 def main():
@@ -24,11 +32,14 @@ def main():
     pdf_file = st.file_uploader("Escolha um arquivo PDF", type="pdf")
 
     if pdf_file:
-        # Convertendo o PDF para DOCX em memória
-        st.write("Convertendo PDF para DOCX...")
-        docx_buffer = pdf_to_docx(pdf_file)
+        # Extrair texto do PDF
+        st.write("Extraindo texto do PDF...")
+        text = pdf_to_text(pdf_file)
 
-        if docx_buffer:
+        if text:
+            # Converter o texto para DOCX em memória
+            docx_buffer = text_to_docx(text)
+            
             st.success(f"Arquivo convertido com sucesso! Você pode baixar o arquivo DOCX abaixo.")
             
             # Botão de download com o arquivo DOCX gerado em memória
@@ -39,7 +50,7 @@ def main():
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
         else:
-            st.error("Erro ao converter o PDF. Tente novamente.")
+            st.error("Erro ao extrair texto do PDF. Verifique o arquivo e tente novamente.")
 
 if __name__ == "__main__":
     main()
