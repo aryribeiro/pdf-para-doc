@@ -1,6 +1,7 @@
 import PyPDF2
 import streamlit as st
 from docx import Document
+import io
 
 def pdf_to_text(pdf_file):
     """Extrai o texto de um arquivo PDF."""
@@ -11,11 +12,16 @@ def pdf_to_text(pdf_file):
         text += page.extract_text()
     return text
 
-def text_to_docx(text, docx_file):
-    """Converte o texto extraído para um arquivo DOCX."""
+def text_to_docx(text):
+    """Converte o texto extraído para um arquivo DOCX e retorna como um objeto em memória."""
     doc = Document()
     doc.add_paragraph(text)
-    doc.save(docx_file)
+    
+    # Criando o arquivo DOCX em memória, não em disco
+    docx_stream = io.BytesIO()
+    doc.save(docx_stream)
+    docx_stream.seek(0)  # Volta para o início do arquivo em memória
+    return docx_stream
 
 def main():
     """Interface do usuário para conversão de PDF para DOCX usando Streamlit."""
@@ -31,11 +37,13 @@ def main():
         text = pdf_to_text(pdf_file)
 
         if text:
-            # Salvar o conteúdo extraído como um arquivo DOCX
-            docx_file = "output.docx"
-            text_to_docx(text, docx_file)
+            # Converter o texto extraído para DOCX em memória
+            docx_stream = text_to_docx(text)
+
             st.success(f"Arquivo convertido com sucesso! Você pode baixar o arquivo DOCX abaixo.")
-            st.download_button("Baixar DOCX", docx_file, file_name=docx_file)
+            
+            # Botão de download que usa o arquivo DOCX em memória
+            st.download_button("Baixar DOCX", docx_stream, file_name="output.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         else:
             st.error("Erro ao extrair texto do PDF. Verifique o arquivo e tente novamente.")
 
