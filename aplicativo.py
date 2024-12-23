@@ -1,7 +1,7 @@
 import PyPDF2
 import streamlit as st
 from docx import Document
-import io
+from io import BytesIO
 
 def pdf_to_text(pdf_file):
     """Extrai o texto de um arquivo PDF."""
@@ -13,15 +13,15 @@ def pdf_to_text(pdf_file):
     return text
 
 def text_to_docx(text):
-    """Converte o texto extraído para um arquivo DOCX e retorna como um objeto em memória."""
+    """Converte o texto extraído para um arquivo DOCX em memória."""
     doc = Document()
     doc.add_paragraph(text)
     
-    # Criando o arquivo DOCX em memória, não em disco
-    docx_stream = io.BytesIO()
-    doc.save(docx_stream)
-    docx_stream.seek(0)  # Volta para o início do arquivo em memória
-    return docx_stream
+    # Salvar o documento em memória com BytesIO
+    docx_buffer = BytesIO()
+    doc.save(docx_buffer)
+    docx_buffer.seek(0)  # Voltar para o início do arquivo em memória
+    return docx_buffer
 
 def main():
     """Interface do usuário para conversão de PDF para DOCX usando Streamlit."""
@@ -37,13 +37,18 @@ def main():
         text = pdf_to_text(pdf_file)
 
         if text:
-            # Converter o texto extraído para DOCX em memória
-            docx_stream = text_to_docx(text)
-
+            # Converter o texto para DOCX em memória
+            docx_buffer = text_to_docx(text)
+            
             st.success(f"Arquivo convertido com sucesso! Você pode baixar o arquivo DOCX abaixo.")
             
-            # Botão de download que usa o arquivo DOCX em memória
-            st.download_button("Baixar DOCX", docx_stream, file_name="output.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            # Botão de download com o arquivo DOCX gerado em memória
+            st.download_button(
+                label="Baixar DOCX",
+                data=docx_buffer,
+                file_name="output.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
         else:
             st.error("Erro ao extrair texto do PDF. Verifique o arquivo e tente novamente.")
 
