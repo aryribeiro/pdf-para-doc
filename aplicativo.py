@@ -8,7 +8,7 @@ from io import BytesIO
 # =========================
 
 # URL do logo
-logo_url = "https://drive.google.com/file/d/1_gFEAzIDq0cXKgjpJ8gOfSWHjia93WVs/view"
+logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 
 # Exibindo o logo pela URL
 # HTML + CSS para centralizar
@@ -21,7 +21,7 @@ st.markdown(
         }}
     </style>
     <div class="centered-logo">
-        <img src="{logo_url}" width="200">
+        <img src="{logo_url}" width="300">
     </div>
     """,
     unsafe_allow_html=True
