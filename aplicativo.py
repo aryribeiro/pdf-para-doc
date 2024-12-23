@@ -82,6 +82,6 @@ if __name__ == "__main__":
 # Rodapé com informações de contato (em vermelho)
 st.markdown("""
 ---
-#### Web App - Conversor de PDF para Docx
+#### Web App - Conversor PDF p/ Docx
 💬 Por Ary Ribeiro. Contato, através do email: aryribeiro@gmail.com
 """)
