@@ -49,11 +49,11 @@ def text_to_docx(text):
 
 def main():
     """Interface do usuário para conversão de PDF para DOCX usando Streamlit."""
-    st.title("Conversor de PDF para DOCX")
+    st.title("Conversor PDF p/ Docx")
 
-    st.write("Envie seu arquivo PDF para convertê-lo em um arquivo DOCX.")
+    st.write("Envie seu arquivo PDF para convertê-lo em um arquivo Docx.")
 
-    pdf_file = st.file_uploader("Escolha um arquivo PDF", type="pdf")
+    pdf_file = st.file_uploader("Escolha seu arquivo abaixo:", type="pdf")
 
     if pdf_file:
         # Extrair texto do PDF
@@ -64,11 +64,11 @@ def main():
             # Converter o texto para DOCX em memória
             docx_buffer = text_to_docx(text)
             
-            st.success(f"Arquivo convertido com sucesso! Você pode baixar o arquivo DOCX abaixo.")
+            st.success(f"Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo.")
             
             # Botão de download com o arquivo DOCX gerado em memória
             st.download_button(
-                label="Baixar DOCX",
+                label="Baixar Docx",
                 data=docx_buffer,
                 file_name="output.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
