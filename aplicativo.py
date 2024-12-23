@@ -3,6 +3,30 @@ import streamlit as st
 from docx import Document
 from io import BytesIO
 
+# =========================
+# Logo do web app
+# =========================
+
+# URL do logo
+logo_url = "https://drive.google.com/file/d/1_gFEAzIDq0cXKgjpJ8gOfSWHjia93WVs/view"
+
+# Exibindo o logo pela URL
+# HTML + CSS para centralizar
+st.markdown(
+    f"""
+    <style>
+        .centered-logo {{
+            display: flex;
+            justify-content: center;
+        }}
+    </style>
+    <div class="centered-logo">
+        <img src="{logo_url}" width="200">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 def pdf_to_text(pdf_file):
     """Extrai o texto de um arquivo PDF."""
     pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -58,6 +82,6 @@ if __name__ == "__main__":
 # Rodapé com informações de contato (em vermelho)
 st.markdown("""
 ---
-#### Conversor de PDF para Docx
+#### Web App - Conversor de PDF para Docx
 💬 Por Ary Ribeiro. Contato, através do email: aryribeiro@gmail.com
 """)
