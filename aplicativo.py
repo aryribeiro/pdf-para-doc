@@ -54,3 +54,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Rodapé com informações de contato (em vermelho)
+st.markdown("""
+---
+#### Conversor de PDF para Docx
+💬 Por Ary Ribeiro. Contato, através do email: aryribeiro@gmail.com
+""")
