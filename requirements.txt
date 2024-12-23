@@ -1,3 +1,2 @@
-PyPDF2
-python-docx
 streamlit
+pdf2docx
