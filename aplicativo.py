@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
-# Logo do Web App e Injeção de CSS + JavaScript para Forçar Centralização
+# Logo do Web App e CSS/JS para Centralização + Texto em Linha Única
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
@@ -30,7 +30,7 @@ st.markdown(
             margin-bottom: 15px;
         }}
         
-        /* CSS com !important para forçar centralização do stRadio */
+        /* Centralização e impedimento de quebra de linha no stRadio */
         div[data-testid="stRadio"] {{
             display: flex !important;
             flex-direction: column !important;
@@ -46,6 +46,7 @@ st.markdown(
             width: 100% !important;
             display: flex !important;
             justify-content: center !important;
+            white-space: nowrap !important;
         }}
         
         div[data-testid="stRadio"] [role="radiogroup"] {{
@@ -53,34 +54,41 @@ st.markdown(
             flex-direction: column !important;
             align-items: flex-start !important;
             margin: 0 auto !important;
+            width: max-content !important;
+        }}
+
+        /* Força os textos das opções a não quebrarem linha */
+        div[data-testid="stRadio"] label p,
+        div[data-testid="stRadio"] label span,
+        div[data-testid="stRadio"] label {{
+            white-space: nowrap !important;
+            word-break: keep-all !important;
         }}
     </style>
 
     <script>
-        // JS injetado para manipular o DOM e garantir alinhamento central em tempo de execução
-        function centralizarOpcoes() {{
+        function forcarLinhaUnicaECentralizar() {{
             const radioContainer = window.parent.document.querySelector('div[data-testid="stRadio"]');
             if (radioContainer) {{
                 radioContainer.style.setProperty('display', 'flex', 'important');
                 radioContainer.style.setProperty('flex-direction', 'column', 'important');
                 radioContainer.style.setProperty('align-items', 'center', 'important');
                 
-                const label = radioContainer.querySelector('label');
-                if (label) {{
-                    label.style.setProperty('text-align', 'center', 'important');
-                    label.style.setProperty('width', '100%', 'important');
-                    label.style.setProperty('justify-content', 'center', 'important');
-                }}
+                const labels = radioContainer.querySelectorAll('label, p, span');
+                labels.forEach(el => {{
+                    el.style.setProperty('white-space', 'nowrap', 'important');
+                    el.style.setProperty('word-break', 'keep-all', 'important');
+                }});
                 
                 const group = radioContainer.querySelector('div[role="radiogroup"]');
                 if (group) {{
                     group.style.setProperty('margin', '0 auto', 'important');
+                    group.style.setProperty('width', 'max-content', 'important');
                 }}
             }}
         }}
-        // Executa após renderização do Streamlit
-        setTimeout(centralizarOpcoes, 200);
-        setTimeout(centralizarOpcoes, 600);
+        setTimeout(forcarLinhaUnicaECentralizar, 200);
+        setTimeout(forcarLinhaUnicaECentralizar, 600);
     </script>
 
     <div class="centered-logo">
@@ -251,7 +259,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Bloco Centralizado (Proporção de colunas 1:2:1 - 50% da tela)
+    # Bloco Centralizado
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
