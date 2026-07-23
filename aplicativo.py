@@ -1,20 +1,22 @@
 import io
 import os
+import tempfile
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
+from pdf2docx import Converter
 from PIL import Image
+from pypdf import PdfWriter
 import pytesseract
 import streamlit as st
 
-# =========================
-# Configurações da Página
-# =========================
+# ==========================================
+# Configurações da Página e Estilo
+# ==========================================
 st.set_page_config(
-    page_title="Conversor PDF p/ Docx Editável",
+    page_title="Conversor PDF p/ Docx Profissional",
     page_icon="📄",
-    layout="centered"
+    layout="centered",
 )
 
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
@@ -35,10 +37,57 @@ st.markdown(
 )
 
 
-def converter_pdf_para_docx_editavel(pdf_file):
+# ==========================================
+# MÓDULO 1: Modo Cópia Fiel (Para Impressão)
+# ==========================================
+def modo_copia_fiel(pdf_file):
+    """Pipeline Híbrido: Gera um PDF pesquisável com OCR e reconstrói o layout perfeito via pdf2docx.
+
+    Excelente para impressão ou visualização idêntica.
     """
-    Lê o PDF, processa via OCR obtendo coordenadas de cada linha,
-    e reconstrói o arquivo com parágrafos NATIVOS do Word (100% editáveis).
+    pdf_bytes = pdf_file.read()
+    doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
+    merger = PdfWriter()
+
+    for page_num in range(len(doc_original)):
+        page = doc_original[page_num]
+        pix = page.get_pixmap(dpi=300)
+        img = Image.open(io.BytesIO(pix.tobytes()))
+
+        pdf_ocr_bytes = pytesseract.image_to_pdf_or_hocr(
+            img, extension="pdf", lang="por"
+        )
+        merger.append(io.BytesIO(pdf_ocr_bytes))
+
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix="_ocr.pdf"
+    ) as temp_ocr_pdf:
+        merger.write(temp_ocr_pdf)
+        temp_ocr_pdf_path = temp_ocr_pdf.name
+
+    temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
+
+    try:
+        cv = Converter(temp_ocr_pdf_path)
+        cv.convert(temp_docx_path, start=0, end=None)
+        cv.close()
+
+        with open(temp_docx_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(temp_ocr_pdf_path):
+            os.remove(temp_ocr_pdf_path)
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
+
+
+# ==========================================
+# MÓDULO 2: Modo Texto Editável (Sem Imagens de Fundo)
+# ==========================================
+def modo_texto_editavel(pdf_file):
+    """Lê as caixas de OCR (image_to_data) e recria parágrafos nativos no Word.
+
+    Livre de imagens travando a edição.
     """
     doc_word = Document()
     pdf_bytes = pdf_file.read()
@@ -46,15 +95,13 @@ def converter_pdf_para_docx_editavel(pdf_file):
 
     for page_num in range(len(pdf_document)):
         page = pdf_document[page_num]
-
-        # 1. Renderiza a página em 300 DPI para alta precisão
         pix = page.get_pixmap(dpi=300)
         img = Image.open(io.BytesIO(pix.tobytes()))
 
-        # 2. Extrai dados estruturados do OCR (palavras, posições, alturas e blocos)
-        data = pytesseract.image_to_data(img, lang="por", output_type=pytesseract.Output.DICT)
+        data = pytesseract.image_to_data(
+            img, lang="por", output_type=pytesseract.Output.DICT
+        )
 
-        # 3. Agrupa as palavras por linhas e blocos
         linhas = {}
         num_items = len(data["text"])
 
@@ -62,7 +109,6 @@ def converter_pdf_para_docx_editavel(pdf_file):
             texto = data["text"][i].strip()
             confianca = int(data["conf"][i])
 
-            # Filtra ruídos ou espaços em branco
             if confianca > 30 and texto:
                 block_num = data["block_num"][i]
                 line_num = data["line_num"][i]
@@ -75,78 +121,124 @@ def converter_pdf_para_docx_editavel(pdf_file):
                     linhas[chave_linha] = {
                         "palavras": [],
                         "top": top,
-                        "heights": []
+                        "heights": [],
                     }
 
                 linhas[chave_linha]["palavras"].append(texto)
                 linhas[chave_linha]["heights"].append(height)
 
-        # 4. Ordena as linhas de cima para baixo
         linhas_ordenadas = sorted(linhas.values(), key=lambda x: x["top"])
 
-        # 5. Adiciona cada linha como um parágrafo nativo e editável no Word
         for item in linhas_ordenadas:
             texto_linha = " ".join(item["palavras"])
-
-            # Ignora cabeçalhos e rodapés indesejados de impressão do navegador
             l_lower = texto_linha.lower()
-            if any(termo in l_lower for termo in ["firefox", "about:blank", "1 of 1", "09/07/2026, 09:26"]):
+
+            # Remove ruídos de topo/rodapé de impressão de navegadores
+            if any(
+                termo in l_lower
+                for termo in ["firefox", "about:blank", "1 of 1"]
+            ):
                 continue
 
-            # Calcula o tamanho da fonte em pontos (pt) baseado na altura dos pixels
             altura_media_px = sum(item["heights"]) / len(item["heights"])
-            
-            # Conversão aproximada: 300 DPI (1 pt ≈ 4.16 px)
-            tamanho_fonte_pt = max(9, min(28, int(altura_media_px / 3.8)))
+            tamanho_fonte_pt = max(9, min(26, int(altura_media_px / 3.8)))
 
             p = doc_word.add_paragraph()
             run = p.add_run(texto_linha)
             run.font.name = "Arial"
             run.font.size = Pt(tamanho_fonte_pt)
 
-            # Aplica Negrito automático para títulos e números em destaque
-            if tamanho_fonte_pt >= 14 or texto_linha.isdigit() or "Protocolo" in texto_linha:
+            if (
+                tamanho_fonte_pt >= 14
+                or texto_linha.isdigit()
+                or "Protocolo" in texto_linha
+            ):
                 run.bold = True
 
-            # Ajusta o espaçamento entre linhas para manter a leitura agradável
             p.paragraph_format.space_after = Pt(4)
 
         if page_num < len(pdf_document) - 1:
             doc_word.add_page_break()
 
-    # Salva o arquivo em memória
     docx_buffer = io.BytesIO()
     doc_word.save(docx_buffer)
     docx_buffer.seek(0)
     return docx_buffer.read()
 
 
-# =========================
-# Interface do App
-# =========================
+# ==========================================
+# MÓDULO 3: Modo Rápido (PDFs Nativos/Digitais)
+# ==========================================
+def modo_padrao_digital(pdf_file):
+    """Conversão direta via pdf2docx para PDFs que já nasceram digitais (criados no Word, Canva, etc.)."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+        temp_pdf.write(pdf_file.read())
+        temp_pdf_path = temp_pdf.name
+
+    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
+
+    try:
+        cv = Converter(temp_pdf_path)
+        cv.convert(temp_docx_path, start=0, end=None)
+        cv.close()
+
+        with open(temp_docx_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
+
+
+# ==========================================
+# Interface do Usuário (Streamlit UI)
+# ==========================================
 def main():
-    st.title("Conversor PDF p/ Docx Editável 📝")
-    st.write("Converta comprovantes, boletos e PDFs em documentos Word **100% editáveis**.")
+    st.title("Conversor PDF p/ Docx 🚀")
+    st.write(
+        "Selecione o objetivo da sua conversão para obter o melhor resultado:"
+    )
+
+    # Seleção de Modo
+    modo = st.radio(
+        "🎯 **Escolha o Modo de Conversão:**",
+        options=[
+            "🎯 Cópia Fiel / Impressão (Fidelidade Visual 100% - Ideal para gerar réplicas perfeitas)",
+            "✏️ Texto Editável (Livre de imagens de fundo - Ideal para alterar números, datas e textos)",
+            "⚡ PDF Digital Padrão (Sem OCR - Mais rápido para arquivos gerados direto do Word/Canva)",
+        ],
+        index=0,
+    )
 
     pdf_file = st.file_uploader("Escolha seu arquivo PDF abaixo:", type="pdf")
 
     if pdf_file:
-        with st.spinner("Extraindo textos e gerando parágrafos editáveis no Word..."):
+        with st.spinner("Processando arquivo com a melhor tecnologia..."):
             try:
                 pdf_file.seek(0)
-                docx_bytes = converter_pdf_para_docx_editavel(pdf_file)
 
-                st.success("✨ Arquivo convertido com sucesso! O texto agora é 100% editável.")
+                if "Cópia Fiel" in modo:
+                    docx_bytes = modo_copia_fiel(pdf_file)
+                    nome_sufixo = "replica_impressao"
+                elif "Texto Editável" in modo:
+                    docx_bytes = modo_texto_editavel(pdf_file)
+                    nome_sufixo = "texto_editavel"
+                else:
+                    docx_bytes = modo_padrao_digital(pdf_file)
+                    nome_sufixo = "convertido"
+
+                st.success("✨ Conversão concluída com sucesso!")
 
                 st.download_button(
-                    label="📥 Baixar Documento Editável (.docx)",
+                    label="📥 Baixar Documento (.docx)",
                     data=docx_bytes,
-                    file_name=f"{pdf_file.name.replace('.pdf', '')}_editavel.docx",
+                    file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
+                    use_container_width=True,
                 )
             except Exception as e:
-                st.error(f"Erro no processamento do arquivo: {e}")
+                st.error(f"Erro ao processar o arquivo: {e}")
 
 
 if __name__ == "__main__":
