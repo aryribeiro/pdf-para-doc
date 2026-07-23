@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
@@ -11,12 +12,10 @@ import pytesseract
 import streamlit as st
 
 # ==========================================
-# Configurações da Página e Estilo
+# Configurações da Página
 # ==========================================
 st.set_page_config(
-    page_title="Conversor PDF p/ Docx Profissional",
-    page_icon="📄",
-    layout="centered",
+    page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
@@ -38,13 +37,10 @@ st.markdown(
 
 
 # ==========================================
-# MÓDULO 1: Modo Cópia Fiel (Para Impressão)
+# MÓDULO 1: Cópia Fiel (Para Impressão)
 # ==========================================
 def modo_copia_fiel(pdf_file):
-    """Pipeline Híbrido: Gera um PDF pesquisável com OCR e reconstrói o layout perfeito via pdf2docx.
-
-    Excelente para impressão ou visualização idêntica.
-    """
+    """Gera PDF intermediário com OCR e aplica pdf2docx para manter 100% da fidelidade visual."""
     pdf_bytes = pdf_file.read()
     doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
     merger = PdfWriter()
@@ -82,13 +78,38 @@ def modo_copia_fiel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 2: Modo Texto Editável (Sem Imagens de Fundo)
+# MÓDULO 2: Texto Editável (Limpeza de Artefatos)
 # ==========================================
-def modo_texto_editavel(pdf_file):
-    """Lê as caixas de OCR (image_to_data) e recria parágrafos nativos no Word.
+def limpar_linha(texto_linha):
+    """Filtra lixo de navegação e remove caracteres/números parasitas que aparecem antes das frases devido a ícones."""
+    if not texto_linha:
+        return None
 
-    Livre de imagens travando a edição.
-    """
+    l_lower = texto_linha.lower().strip()
+
+    # Termos de rodapé/cabeçalho de navegadores a descartar
+    blacklist = ["firefox", "about:blank", "lofl", "1 of 1"]
+    if any(termo in l_lower for termo in blacklist):
+        return None
+
+    # 1. Remove marcadores do tipo (1), [E, ou números isolados antes de texto de letras
+    texto_limpo = re.sub(
+        r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
+    )
+    texto_limpo = re.sub(
+        r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])",
+        "",
+        texto_limpo,
+    )
+
+    # 2. Remove símbolos e caracteres especiais soltos no início da linha
+    texto_limpo = re.sub(r"^\s*[^a-zA-Z0-9À-ÿ]+\s*(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
+
+    return texto_limpo.strip() if texto_limpo.strip() else None
+
+
+def modo_texto_editavel(pdf_file):
+    """Extrai texto e coordenadas via OCR, limpa artefatos e constrói parágrafos nativos no Word."""
     doc_word = Document()
     pdf_bytes = pdf_file.read()
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -130,14 +151,10 @@ def modo_texto_editavel(pdf_file):
         linhas_ordenadas = sorted(linhas.values(), key=lambda x: x["top"])
 
         for item in linhas_ordenadas:
-            texto_linha = " ".join(item["palavras"])
-            l_lower = texto_linha.lower()
+            texto_bruto = " ".join(item["palavras"])
+            texto_linha = limpar_linha(texto_bruto)
 
-            # Remove ruídos de topo/rodapé de impressão de navegadores
-            if any(
-                termo in l_lower
-                for termo in ["firefox", "about:blank", "1 of 1"]
-            ):
+            if not texto_linha:
                 continue
 
             altura_media_px = sum(item["heights"]) / len(item["heights"])
@@ -167,78 +184,48 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Modo Rápido (PDFs Nativos/Digitais)
-# ==========================================
-def modo_padrao_digital(pdf_file):
-    """Conversão direta via pdf2docx para PDFs que já nasceram digitais (criados no Word, Canva, etc.)."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(pdf_file.read())
-        temp_pdf_path = temp_pdf.name
-
-    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
-
-    try:
-        cv = Converter(temp_pdf_path)
-        cv.convert(temp_docx_path, start=0, end=None)
-        cv.close()
-
-        with open(temp_docx_path, "rb") as f:
-            return f.read()
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
-
-
-# ==========================================
-# Interface do Usuário (Streamlit UI)
+# Interface do Usuário
 # ==========================================
 def main():
-    st.title("Conversor PDF p/ Docx 🚀")
-    st.write(
-        "Selecione o objetivo da sua conversão para obter o melhor resultado:"
-    )
+    st.title("Conversor PDF p/ Docx")
+    st.write("Envie seu arquivo PDF para convertê-lo em um arquivo Docx.")
 
-    # Seleção de Modo
     modo = st.radio(
-        "🎯 **Escolha o Modo de Conversão:**",
+        "Escolha o modo de conversão:",
         options=[
-            "🎯 Cópia Fiel / Impressão (Fidelidade Visual 100% - Ideal para gerar réplicas perfeitas)",
-            "✏️ Texto Editável (Livre de imagens de fundo - Ideal para alterar números, datas e textos)",
-            "⚡ PDF Digital Padrão (Sem OCR - Mais rápido para arquivos gerados direto do Word/Canva)",
+            "Cópia Fiel (Para Impressão - Mantém o layout 100% igual)",
+            "Texto Editável (Para Edição - Texto limpo sem imagens de fundo)",
         ],
         index=0,
     )
 
-    pdf_file = st.file_uploader("Escolha seu arquivo PDF abaixo:", type="pdf")
+    pdf_file = st.file_uploader("Escolha seu arquivo abaixo:", type="pdf")
 
     if pdf_file:
-        with st.spinner("Processando arquivo com a melhor tecnologia..."):
+        with st.spinner("Convertendo arquivo..."):
             try:
                 pdf_file.seek(0)
 
                 if "Cópia Fiel" in modo:
                     docx_bytes = modo_copia_fiel(pdf_file)
-                    nome_sufixo = "replica_impressao"
-                elif "Texto Editável" in modo:
-                    docx_bytes = modo_texto_editavel(pdf_file)
-                    nome_sufixo = "texto_editavel"
+                    nome_sufixo = "copia_fiel"
                 else:
-                    docx_bytes = modo_padrao_digital(pdf_file)
-                    nome_sufixo = "convertido"
+                    docx_bytes = modo_texto_editavel(pdf_file)
+                    nome_sufixo = "editavel"
 
-                st.success("✨ Conversão concluída com sucesso!")
+                st.success(
+                    "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
+                )
 
                 st.download_button(
-                    label="📥 Baixar Documento (.docx)",
+                    label="Baixar Docx",
                     data=docx_bytes,
                     file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True,
                 )
             except Exception as e:
-                st.error(f"Erro ao processar o arquivo: {e}")
+                st.error(f"Erro ao converter o arquivo: {e}")
 
 
 if __name__ == "__main__":
