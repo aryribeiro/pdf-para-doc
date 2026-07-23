@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
-# Logo do Web App (Reduzida em 50%) e Estilos de Centralização
+# Logo do Web App (150px) e CSS para Centralização Completa da UI
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
@@ -30,18 +30,26 @@ st.markdown(
             margin-bottom: 15px;
         }}
         
-        /* Centralização das opções e do rótulo do st.radio */
+        /* Centralização do rótulo e do grupo de radio buttons */
         div[data-testid="stRadio"] {{
             display: flex;
             flex-direction: column;
             align-items: center;
             text-align: center;
+            width: 100%;
         }}
+        
         div[data-testid="stRadio"] > label {{
             text-align: center;
+            width: 100%;
+            display: block;
         }}
-        div[data-testid="stRadio"] > div {{
+        
+        div[data-testid="stRadio"] [role="radiogroup"] {{
+            display: inline-flex;
+            flex-direction: column;
             align-items: flex-start;
+            margin: 0 auto;
         }}
     </style>
     <div class="centered-logo">
@@ -200,7 +208,7 @@ def modo_texto_editavel(pdf_file):
 # Interface do Usuário (Streamlit UI)
 # ==========================================
 def main():
-    # Título (Reduzido em 50%) e Subtítulo Centralizados
+    # Título e Subtítulo Centralizados
     st.markdown(
         "<h2 style='text-align: center; font-size: 1.6rem; margin-top: 0;'>Conversor PDF p/ Docx</h2>",
         unsafe_allow_html=True,
@@ -212,7 +220,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Opções do Modo de Conversão (Centralizadas via CSS)
+    # Opções do Modo de Conversão (Centralizadas)
     modo = st.radio(
         "Escolha o modo de conversão:",
         options=[
