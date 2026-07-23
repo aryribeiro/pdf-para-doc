@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
-# Logo do Web App e CSS/JS para Centralização + Texto em Linha Única
+# Logo do Web App e CSS/JS para Centralização
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
@@ -259,7 +259,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Bloco Centralizado
+    # Bloco Centralizado (50% de largura da tela)
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
@@ -286,31 +286,32 @@ def main():
             label_visibility="collapsed",
         )
 
-    if pdf_file:
-        with st.spinner("Convertendo arquivo..."):
-            try:
-                pdf_file.seek(0)
+        # Processamento, Alerta e Botão de Download dentro da coluna de 50%
+        if pdf_file:
+            with st.spinner("Convertendo arquivo..."):
+                try:
+                    pdf_file.seek(0)
 
-                if "Cópia Fiel" in modo:
-                    docx_bytes = modo_copia_fiel(pdf_file)
-                    nome_sufixo = "copia_fiel"
-                else:
-                    docx_bytes = modo_texto_editavel(pdf_file)
-                    nome_sufixo = "editavel"
+                    if "Cópia Fiel" in modo:
+                        docx_bytes = modo_copia_fiel(pdf_file)
+                        nome_sufixo = "copia_fiel"
+                    else:
+                        docx_bytes = modo_texto_editavel(pdf_file)
+                        nome_sufixo = "editavel"
 
-                st.success(
-                    "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
-                )
+                    st.success(
+                        "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
+                    )
 
-                st.download_button(
-                    label="Baixar Docx",
-                    data=docx_bytes,
-                    file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
-            except Exception as e:
-                st.error(f"Erro ao converter o arquivo: {e}")
+                    st.download_button(
+                        label="Baixar Docx",
+                        data=docx_bytes,
+                        file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"Erro ao converter o arquivo: {e}")
 
 
 if __name__ == "__main__":
