@@ -273,15 +273,9 @@ def main():
             index=0,
         )
 
-        # Instrução de Upload
-        st.markdown(
-            "<p style='text-align: center; margin-top: 15px; margin-bottom: 5px;'>Escolha seu arquivo abaixo:</p>",
-            unsafe_allow_html=True,
-        )
-
         # Upload de Arquivo
         pdf_file = st.file_uploader(
-            "",
+            " ",
             type="pdf",
             label_visibility="collapsed",
         )
