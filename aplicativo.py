@@ -319,9 +319,9 @@ if __name__ == "__main__":
 
 # Rodapé Centralizado
 st.markdown("""
----
+
 <div style="text-align: center;">
     <h4 style="margin-bottom: 5px;">Web App - Conversor PDF p/ Docx</h4>
-    <p style="color: #666666;">💬 Por Ary Ribeiro. Contato, através do email: <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com</a></p>
+    <p style="color: #666666;">💬 Por Ary Ribeiro: <a href="https://www.linkedin.com/in/aryribeiro">https://www.linkedin.com/in/aryribeiro</a></p>
 </div>
 """, unsafe_allow_html=True)
