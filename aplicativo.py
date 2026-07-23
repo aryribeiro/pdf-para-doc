@@ -18,6 +18,7 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
+# Logo do Web App
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
@@ -87,12 +88,11 @@ def limpar_linha(texto_linha):
 
     l_lower = texto_linha.lower().strip()
 
-    # Termos de rodapé/cabeçalho de navegadores a descartar
     blacklist = ["firefox", "about:blank", "lofl", "1 of 1"]
     if any(termo in l_lower for termo in blacklist):
         return None
 
-    # 1. Remove marcadores do tipo (1), [E, ou números isolados antes de texto de letras
+    # Remove marcadores e caracteres estranhos
     texto_limpo = re.sub(
         r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
     )
@@ -101,8 +101,6 @@ def limpar_linha(texto_linha):
         "",
         texto_limpo,
     )
-
-    # 2. Remove símbolos e caracteres especiais soltos no início da linha
     texto_limpo = re.sub(r"^\s*[^a-zA-Z0-9À-ÿ]+\s*(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
 
     return texto_limpo.strip() if texto_limpo.strip() else None
@@ -184,12 +182,22 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# Interface do Usuário
+# Interface do Usuário (Streamlit UI)
 # ==========================================
 def main():
-    st.title("Conversor PDF p/ Docx")
-    st.write("Envie seu arquivo PDF para convertê-lo em um arquivo Docx.")
+    # Título e Subtítulo Centralizados
+    st.markdown(
+        "<h1 style='text-align: center;'>Conversor PDF p/ Docx</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='text-align: center; color: #555555; margin-bottom: 25px;'>"
+        "Envie seu arquivo PDF para convertê-lo em um arquivo Docx."
+        "</p>",
+        unsafe_allow_html=True,
+    )
 
+    # Opções do Modo de Conversão
     modo = st.radio(
         "Escolha o modo de conversão:",
         options=[
@@ -199,7 +207,16 @@ def main():
         index=0,
     )
 
-    pdf_file = st.file_uploader("Escolha seu arquivo abaixo:", type="pdf")
+    st.write("Escolha seu arquivo abaixo:")
+
+    # Área de Upload Reduzida em 50% e Centralizada (Proporção de colunas 1:2:1)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        pdf_file = st.file_uploader(
+            "Escolha seu arquivo abaixo:",
+            type="pdf",
+            label_visibility="collapsed",
+        )
 
     if pdf_file:
         with st.spinner("Convertendo arquivo..."):
@@ -231,9 +248,11 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Rodapé
+# Rodapé Centralizado
 st.markdown("""
 ---
-#### Web App - Conversor PDF p/ Docx
-💬 Por Ary Ribeiro. Contato, através do email: aryribeiro@gmail.com
-""")
+<div style="text-align: center;">
+    <h4 style="margin-bottom: 5px;">Web App - Conversor PDF p/ Docx</h4>
+    <p style="color: #666666;">💬 Por Ary Ribeiro. Contato, através do email: <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com</a></p>
+</div>
+""", unsafe_allow_html=True)
