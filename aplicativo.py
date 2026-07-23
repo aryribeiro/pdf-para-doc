@@ -99,5 +99,5 @@ if __name__ == "__main__":
 st.markdown("""
 ---
 #### Web App - Conversor PDF p/ Docx
-💬 Por Ary Ribeiro. Contato, através do email: aryribeiro@gmail.com
+💬 Por Ary Ribeiro: https://www.linkedin.com/in/aryribeiro
 """)
