@@ -267,8 +267,8 @@ def main():
         modo = st.radio(
             "Escolha o modo de conversão:",
             options=[
-                "Cópia Fiel (Para Impressão - Mantém o layout 100% igual)",
-                "Texto Editável (Para Edição - Texto limpo sem imagens de fundo)",
+                "Cópia Fiel (Para Impressão: layout idêntico)",
+                "Texto Editável (Texto limpo sem imagens)",
             ],
             index=0,
         )
