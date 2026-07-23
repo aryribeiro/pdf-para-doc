@@ -254,7 +254,7 @@ def main():
     )
     st.markdown(
         "<p style='text-align: center; color: #555555; margin-bottom: 20px; font-size: 0.95rem;'>"
-        "Envie seu arquivo PDF para convertê-lo em um arquivo Docx."
+        "Envie PDF para convertê-lo em Docx."
         "</p>",
         unsafe_allow_html=True,
     )
@@ -321,7 +321,6 @@ if __name__ == "__main__":
 st.markdown("""
 
 <div style="text-align: center;">
-    <h4 style="margin-bottom: 5px;">Web App - Conversor PDF p/ Docx</h4>
     <p style="color: #666666;">💬 Por Ary Ribeiro: <a href="https://www.linkedin.com/in/aryribeiro">https://www.linkedin.com/in/aryribeiro</a></p>
 </div>
 """, unsafe_allow_html=True)
