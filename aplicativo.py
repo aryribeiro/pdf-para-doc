@@ -1,10 +1,10 @@
 import io
 import os
-import tempfile
 import fitz  # PyMuPDF
-from pdf2docx import Converter
+from docx import Document
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import Image
-from pypdf import PdfWriter
 import pytesseract
 import streamlit as st
 
@@ -12,7 +12,9 @@ import streamlit as st
 # Configurações da Página
 # =========================
 st.set_page_config(
-    page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
+    page_title="Conversor PDF p/ Docx Editável",
+    page_icon="📄",
+    layout="centered"
 )
 
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
@@ -33,97 +35,118 @@ st.markdown(
 )
 
 
-def pipeline_hibrido_pdf_para_docx(pdf_file):
-    """Pipeline Híbrido:
-
-    1. Renderiza páginas em 300 DPI e aplica OCR com coordenadas (X, Y).
-    2. Gera um PDF intermediário com camada de texto estruturada.
-    3. Alimenta o pdf2docx para recriar o layout, imagens, tabelas e fontes no Word.
+def converter_pdf_para_docx_editavel(pdf_file):
     """
+    Lê o PDF, processa via OCR obtendo coordenadas de cada linha,
+    e reconstrói o arquivo com parágrafos NATIVOS do Word (100% editáveis).
+    """
+    doc_word = Document()
     pdf_bytes = pdf_file.read()
-    doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
-    merger = PdfWriter()
+    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # -------------------------------------------------------------
-    # ETAPA 1: OCR por página para enriquecer com coordenadas
-    # -------------------------------------------------------------
-    for page_num in range(len(doc_original)):
-        page = doc_original[page_num]
+    for page_num in range(len(pdf_document)):
+        page = pdf_document[page_num]
 
-        # Renderiza a página em alta definição (300 DPI)
+        # 1. Renderiza a página em 300 DPI para alta precisão
         pix = page.get_pixmap(dpi=300)
         img = Image.open(io.BytesIO(pix.tobytes()))
 
-        # O Tesseract gera um PDF de 1 página contendo o texto e suas coordenadas visuais
-        pdf_ocr_bytes = pytesseract.image_to_pdf_or_hocr(
-            img, extension="pdf", lang="por"
-        )
+        # 2. Extrai dados estruturados do OCR (palavras, posições, alturas e blocos)
+        data = pytesseract.image_to_data(img, lang="por", output_type=pytesseract.Output.DICT)
 
-        # Adiciona a página enriquecida ao acumulador
-        page_pdf_file = io.BytesIO(pdf_ocr_bytes)
-        merger.append(page_pdf_file)
+        # 3. Agrupa as palavras por linhas e blocos
+        linhas = {}
+        num_items = len(data["text"])
 
-    # Salva o PDF enriquecido temporariamente no disco
-    with tempfile.NamedTemporaryFile(
-        delete=False, suffix="_ocr.pdf"
-    ) as temp_ocr_pdf:
-        merger.write(temp_ocr_pdf)
-        temp_ocr_pdf_path = temp_ocr_pdf.name
+        for i in range(num_items):
+            texto = data["text"][i].strip()
+            confianca = int(data["conf"][i])
 
-    temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
+            # Filtra ruídos ou espaços em branco
+            if confianca > 30 and texto:
+                block_num = data["block_num"][i]
+                line_num = data["line_num"][i]
+                chave_linha = (block_num, line_num)
 
-    # -------------------------------------------------------------
-    # ETAPA 2: Reconstrução de Layout com pdf2docx
-    # -------------------------------------------------------------
-    try:
-        cv = Converter(temp_ocr_pdf_path)
-        # Processa todas as páginas recriando o layout com base nas coordenadas do OCR
-        cv.convert(temp_docx_path, start=0, end=None)
-        cv.close()
+                top = data["top"][i]
+                height = data["height"][i]
 
-        with open(temp_docx_path, "rb") as f:
-            docx_bytes = f.read()
+                if chave_linha not in linhas:
+                    linhas[chave_linha] = {
+                        "palavras": [],
+                        "top": top,
+                        "heights": []
+                    }
 
-        return docx_bytes
+                linhas[chave_linha]["palavras"].append(texto)
+                linhas[chave_linha]["heights"].append(height)
 
-    finally:
-        # Limpeza de arquivos temporários do servidor
-        if os.path.exists(temp_ocr_pdf_path):
-            os.remove(temp_ocr_pdf_path)
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
+        # 4. Ordena as linhas de cima para baixo
+        linhas_ordenadas = sorted(linhas.values(), key=lambda x: x["top"])
+
+        # 5. Adiciona cada linha como um parágrafo nativo e editável no Word
+        for item in linhas_ordenadas:
+            texto_linha = " ".join(item["palavras"])
+
+            # Ignora cabeçalhos e rodapés indesejados de impressão do navegador
+            l_lower = texto_linha.lower()
+            if any(termo in l_lower for termo in ["firefox", "about:blank", "1 of 1", "09/07/2026, 09:26"]):
+                continue
+
+            # Calcula o tamanho da fonte em pontos (pt) baseado na altura dos pixels
+            altura_media_px = sum(item["heights"]) / len(item["heights"])
+            
+            # Conversão aproximada: 300 DPI (1 pt ≈ 4.16 px)
+            tamanho_fonte_pt = max(9, min(28, int(altura_media_px / 3.8)))
+
+            p = doc_word.add_paragraph()
+            run = p.add_run(texto_linha)
+            run.font.name = "Arial"
+            run.font.size = Pt(tamanho_fonte_pt)
+
+            # Aplica Negrito automático para títulos e números em destaque
+            if tamanho_fonte_pt >= 14 or texto_linha.isdigit() or "Protocolo" in texto_linha:
+                run.bold = True
+
+            # Ajusta o espaçamento entre linhas para manter a leitura agradável
+            p.paragraph_format.space_after = Pt(4)
+
+        if page_num < len(pdf_document) - 1:
+            doc_word.add_page_break()
+
+    # Salva o arquivo em memória
+    docx_buffer = io.BytesIO()
+    doc_word.save(docx_buffer)
+    docx_buffer.seek(0)
+    return docx_buffer.read()
 
 
 # =========================
 # Interface do App
 # =========================
 def main():
-    st.title("Conversor Inteligente PDF p/ Docx 🚀")
-    st.write(
-        "Upload de arquivos com processamento em pipeline híbrido (OCR + Preservação de Layout)."
-    )
+    st.title("Conversor PDF p/ Docx Editável 📝")
+    st.write("Converta comprovantes, boletos e PDFs em documentos Word **100% editáveis**.")
 
     pdf_file = st.file_uploader("Escolha seu arquivo PDF abaixo:", type="pdf")
 
     if pdf_file:
-        with st.spinner(
-            "Executando Pipeline Híbrido (Visão Computacional + Reconstrução de Layout)..."
-        ):
+        with st.spinner("Extraindo textos e gerando parágrafos editáveis no Word..."):
             try:
                 pdf_file.seek(0)
-                docx_bytes = pipeline_hibrido_pdf_para_docx(pdf_file)
+                docx_bytes = converter_pdf_para_docx_editavel(pdf_file)
 
-                st.success("✨ Documento convertido com sucesso!")
+                st.success("✨ Arquivo convertido com sucesso! O texto agora é 100% editável.")
 
                 st.download_button(
-                    label="📥 Baixar Documento (.docx)",
+                    label="📥 Baixar Documento Editável (.docx)",
                     data=docx_bytes,
-                    file_name=f"{pdf_file.name.replace('.pdf', '')}_convertido.docx",
+                    file_name=f"{pdf_file.name.replace('.pdf', '')}_editavel.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
+                    use_container_width=True
                 )
             except Exception as e:
-                st.error(f"Erro durante o pipeline de conversão: {e}")
+                st.error(f"Erro no processamento do arquivo: {e}")
 
 
 if __name__ == "__main__":
