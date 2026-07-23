@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
-# Logo do Web App (150px) e CSS para Centralização Completa da UI
+# Logo do Web App e Injeção de CSS + JavaScript para Forçar Centralização
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
@@ -30,28 +30,59 @@ st.markdown(
             margin-bottom: 15px;
         }}
         
-        /* Centralização do rótulo e do grupo de radio buttons */
+        /* CSS com !important para forçar centralização do stRadio */
         div[data-testid="stRadio"] {{
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-align: center;
-            width: 100%;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            text-align: center !important;
+            width: 100% !important;
         }}
         
-        div[data-testid="stRadio"] > label {{
-            text-align: center;
-            width: 100%;
-            display: block;
+        div[data-testid="stRadio"] > label,
+        div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {{
+            text-align: center !important;
+            width: 100% !important;
+            display: flex !important;
+            justify-content: center !important;
         }}
         
         div[data-testid="stRadio"] [role="radiogroup"] {{
-            display: inline-flex;
-            flex-direction: column;
-            align-items: flex-start;
-            margin: 0 auto;
+            display: inline-flex !important;
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            margin: 0 auto !important;
         }}
     </style>
+
+    <script>
+        // JS injetado para manipular o DOM e garantir alinhamento central em tempo de execução
+        function centralizarOpcoes() {{
+            const radioContainer = window.parent.document.querySelector('div[data-testid="stRadio"]');
+            if (radioContainer) {{
+                radioContainer.style.setProperty('display', 'flex', 'important');
+                radioContainer.style.setProperty('flex-direction', 'column', 'important');
+                radioContainer.style.setProperty('align-items', 'center', 'important');
+                
+                const label = radioContainer.querySelector('label');
+                if (label) {{
+                    label.style.setProperty('text-align', 'center', 'important');
+                    label.style.setProperty('width', '100%', 'important');
+                    label.style.setProperty('justify-content', 'center', 'important');
+                }}
+                
+                const group = radioContainer.querySelector('div[role="radiogroup"]');
+                if (group) {{
+                    group.style.setProperty('margin', '0 auto', 'important');
+                }}
+            }}
+        }}
+        // Executa após renderização do Streamlit
+        setTimeout(centralizarOpcoes, 200);
+        setTimeout(centralizarOpcoes, 600);
+    </script>
+
     <div class="centered-logo">
         <img src="{logo_url}" width="150">
     </div>
@@ -220,25 +251,27 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Opções do Modo de Conversão (Centralizadas)
-    modo = st.radio(
-        "Escolha o modo de conversão:",
-        options=[
-            "Cópia Fiel (Para Impressão - Mantém o layout 100% igual)",
-            "Texto Editável (Para Edição - Texto limpo sem imagens de fundo)",
-        ],
-        index=0,
-    )
-
-    # Texto Instrucional Centralizado
-    st.markdown(
-        "<p style='text-align: center; margin-top: 15px; margin-bottom: 5px;'>Escolha seu arquivo abaixo:</p>",
-        unsafe_allow_html=True,
-    )
-
-    # Área de Upload Reduzida em 50% e Centralizada (Proporção de colunas 1:2:1)
+    # Bloco Centralizado (Proporção de colunas 1:2:1 - 50% da tela)
     col1, col2, col3 = st.columns([1, 2, 1])
+
     with col2:
+        # Modo de Conversão
+        modo = st.radio(
+            "Escolha o modo de conversão:",
+            options=[
+                "Cópia Fiel (Para Impressão - Mantém o layout 100% igual)",
+                "Texto Editável (Para Edição - Texto limpo sem imagens de fundo)",
+            ],
+            index=0,
+        )
+
+        # Instrução de Upload
+        st.markdown(
+            "<p style='text-align: center; margin-top: 15px; margin-bottom: 5px;'>Escolha seu arquivo abaixo:</p>",
+            unsafe_allow_html=True,
+        )
+
+        # Upload de Arquivo
         pdf_file = st.file_uploader(
             "Escolha seu arquivo abaixo:",
             type="pdf",
