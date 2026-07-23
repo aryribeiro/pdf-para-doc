@@ -281,7 +281,6 @@ def main():
 
         # Upload de Arquivo
         pdf_file = st.file_uploader(
-            "Escolha seu arquivo abaixo:",
             type="pdf",
             label_visibility="collapsed",
         )
