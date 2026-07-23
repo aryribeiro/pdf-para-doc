@@ -254,7 +254,7 @@ def main():
     )
     st.markdown(
         "<p style='text-align: center; color: #555555; margin-bottom: 20px; font-size: 0.95rem;'>"
-        "Envie PDF para convertê-lo em Docx."
+        "Envie PDF para converter em Docx"
         "</p>",
         unsafe_allow_html=True,
     )
@@ -323,4 +323,33 @@ st.markdown("""
 <div style="text-align: center;">
     <p style="color: #666666;">💬 Por Ary Ribeiro: <a href="https://www.linkedin.com/in/aryribeiro">https://www.linkedin.com/in/aryribeiro</a></p>
 </div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<style>
+    .main {
+        background-color: #ffffff;
+        color: #333333;
+    }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
+    header {display: none !important;}
+    footer {display: none !important;}
+    #MainMenu {display: none !important;}
+    div[data-testid="stAppViewBlockContainer"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    .element-container {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+</style>
 """, unsafe_allow_html=True)
