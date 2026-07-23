@@ -317,14 +317,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Rodapé Centralizado
-st.markdown("""
-
-<div style="text-align: center;">
-    <p style="color: #666666;">💬 Por Ary Ribeiro: <a href="https://www.linkedin.com/in/aryribeiro">https://www.linkedin.com/in/aryribeiro</a></p>
-</div>
-""", unsafe_allow_html=True)
-
     st.markdown("""
 <style>
     .main {
