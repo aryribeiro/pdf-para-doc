@@ -18,19 +18,34 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
-# Logo do Web App
+# Logo do Web App (Reduzida em 50%) e Estilos de Centralização
 logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
     <style>
+        /* Centralização da logo */
         .centered-logo {{
             display: flex;
             justify-content: center;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
+        }}
+        
+        /* Centralização das opções e do rótulo do st.radio */
+        div[data-testid="stRadio"] {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }}
+        div[data-testid="stRadio"] > label {{
+            text-align: center;
+        }}
+        div[data-testid="stRadio"] > div {{
+            align-items: flex-start;
         }}
     </style>
     <div class="centered-logo">
-        <img src="{logo_url}" width="300">
+        <img src="{logo_url}" width="150">
     </div>
     """,
     unsafe_allow_html=True,
@@ -185,19 +200,19 @@ def modo_texto_editavel(pdf_file):
 # Interface do Usuário (Streamlit UI)
 # ==========================================
 def main():
-    # Título e Subtítulo Centralizados
+    # Título (Reduzido em 50%) e Subtítulo Centralizados
     st.markdown(
-        "<h1 style='text-align: center;'>Conversor PDF p/ Docx</h1>",
+        "<h2 style='text-align: center; font-size: 1.6rem; margin-top: 0;'>Conversor PDF p/ Docx</h2>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<p style='text-align: center; color: #555555; margin-bottom: 25px;'>"
+        "<p style='text-align: center; color: #555555; margin-bottom: 20px; font-size: 0.95rem;'>"
         "Envie seu arquivo PDF para convertê-lo em um arquivo Docx."
         "</p>",
         unsafe_allow_html=True,
     )
 
-    # Opções do Modo de Conversão
+    # Opções do Modo de Conversão (Centralizadas via CSS)
     modo = st.radio(
         "Escolha o modo de conversão:",
         options=[
@@ -207,7 +222,11 @@ def main():
         index=0,
     )
 
-    st.write("Escolha seu arquivo abaixo:")
+    # Texto Instrucional Centralizado
+    st.markdown(
+        "<p style='text-align: center; margin-top: 15px; margin-bottom: 5px;'>Escolha seu arquivo abaixo:</p>",
+        unsafe_allow_html=True,
+    )
 
     # Área de Upload Reduzida em 50% e Centralizada (Proporção de colunas 1:2:1)
     col1, col2, col3 = st.columns([1, 2, 1])
