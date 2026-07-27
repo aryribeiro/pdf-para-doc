@@ -1,6 +1,8 @@
 import io
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
@@ -23,14 +25,11 @@ logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
     <style>
-        /* Centralização da logo */
         .centered-logo {{
             display: flex;
             justify-content: center;
             margin-bottom: 15px;
         }}
-        
-        /* Centralização e impedimento de quebra de linha no stRadio */
         div[data-testid="stRadio"] {{
             display: flex !important;
             flex-direction: column !important;
@@ -39,7 +38,6 @@ st.markdown(
             text-align: center !important;
             width: 100% !important;
         }}
-        
         div[data-testid="stRadio"] > label,
         div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {{
             text-align: center !important;
@@ -48,7 +46,6 @@ st.markdown(
             justify-content: center !important;
             white-space: nowrap !important;
         }}
-        
         div[data-testid="stRadio"] [role="radiogroup"] {{
             display: inline-flex !important;
             flex-direction: column !important;
@@ -56,8 +53,6 @@ st.markdown(
             margin: 0 auto !important;
             width: max-content !important;
         }}
-
-        /* Força os textos das opções a não quebrarem linha */
         div[data-testid="stRadio"] label p,
         div[data-testid="stRadio"] label span,
         div[data-testid="stRadio"] label {{
@@ -103,7 +98,6 @@ st.markdown(
 # MÓDULO 1: Cópia Fiel (Para Impressão)
 # ==========================================
 def modo_copia_fiel(pdf_file):
-    """Gera PDF intermediário com OCR e aplica pdf2docx para manter 100% da fidelidade visual."""
     pdf_bytes = pdf_file.read()
     doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
     merger = PdfWriter()
@@ -144,31 +138,22 @@ def modo_copia_fiel(pdf_file):
 # MÓDULO 2: Texto Editável (Limpeza de Artefatos)
 # ==========================================
 def limpar_linha(texto_linha):
-    """Filtra lixo de navegação e remove caracteres/números parasitas que aparecem antes das frases devido a ícones."""
     if not texto_linha:
         return None
 
     l_lower = texto_linha.lower().strip()
-
     blacklist = ["firefox", "about:blank", "lofl", "1 of 1"]
     if any(termo in l_lower for termo in blacklist):
         return None
 
-    texto_limpo = re.sub(
-        r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
-    )
-    texto_limpo = re.sub(
-        r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])",
-        "",
-        texto_limpo,
-    )
+    texto_limpo = re.sub(r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha)
+    texto_limpo = re.sub(r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
     texto_limpo = re.sub(r"^\s*[^a-zA-Z0-9À-ÿ]+\s*(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
 
     return texto_limpo.strip() if texto_limpo.strip() else None
 
 
 def modo_texto_editavel(pdf_file):
-    """Extrai texto e coordenadas via OCR, limpa artefatos e constrói parágrafos nativos no Word."""
     doc_word = Document()
     pdf_bytes = pdf_file.read()
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -193,16 +178,11 @@ def modo_texto_editavel(pdf_file):
                 block_num = data["block_num"][i]
                 line_num = data["line_num"][i]
                 chave_linha = (block_num, line_num)
-
                 top = data["top"][i]
                 height = data["height"][i]
 
                 if chave_linha not in linhas:
-                    linhas[chave_linha] = {
-                        "palavras": [],
-                        "top": top,
-                        "heights": [],
-                    }
+                    linhas[chave_linha] = {"palavras": [], "top": top, "heights": []}
 
                 linhas[chave_linha]["palavras"].append(texto)
                 linhas[chave_linha]["heights"].append(height)
@@ -224,11 +204,7 @@ def modo_texto_editavel(pdf_file):
             run.font.name = "Arial"
             run.font.size = Pt(tamanho_fonte_pt)
 
-            if (
-                tamanho_fonte_pt >= 14
-                or texto_linha.isdigit()
-                or "Protocolo" in texto_linha
-            ):
+            if tamanho_fonte_pt >= 14 or texto_linha.isdigit() or "Protocolo" in texto_linha:
                 run.bold = True
 
             p.paragraph_format.space_after = Pt(4)
@@ -242,39 +218,65 @@ def modo_texto_editavel(pdf_file):
     return docx_buffer.read()
 
 # ==========================================
-# MÓDULO 3: NOVO - Fiel e Editável (Para PDFs Nativos)
+# MÓDULO 3: NOVO - Fiel e Editável (Motor Híbrido Padrão Ouro)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
-    """Usa o pdf2docx no arquivo original nativo sem aplicar OCR. 
-       Preserva tabelas, vetores, fontes reais e todo o layout editável estruturado."""
+    """
+    Motor híbrido: Tenta usar o LibreOffice (Enterprise) para garantir 
+    estruturas fiéis. Se não estiver instalado, faz fallback seguro pro pdf2docx.
+    """
     pdf_bytes = pdf_file.read()
     
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(pdf_bytes)
-        temp_pdf_path = temp_pdf.name
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_pdf_path = os.path.join(temp_dir, "input.pdf")
+        with open(temp_pdf_path, "wb") as f:
+            f.write(pdf_bytes)
 
-    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
+        temp_docx_path = os.path.join(temp_dir, "input.docx")
 
-    try:
-        # Extração direta estrutural da biblioteca
-        cv = Converter(temp_pdf_path)
-        cv.convert(temp_docx_path, start=0, end=None)
-        cv.close()
+        # 1. Tentativa Primária: LibreOffice Headless (Não quebra listas e parágrafos)
+        lo_path = shutil.which("soffice") or shutil.which("libreoffice")
+        
+        if lo_path:
+            try:
+                subprocess.run(
+                    [
+                        lo_path,
+                        "--headless",
+                        "--nologo",
+                        "--nofirststartwizard",
+                        "--convert-to", "docx",
+                        "--outdir", temp_dir,
+                        temp_pdf_path
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=90
+                )
+                
+                if os.path.exists(temp_docx_path):
+                    with open(temp_docx_path, "rb") as f:
+                        return f.read()
+            except Exception as e:
+                print(f"Aviso: LibreOffice falhou ({e}). Tentando fallback...")
 
-        with open(temp_docx_path, "rb") as f:
-            return f.read()
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
+        # 2. Fallback Secundário: pdf2docx (Caso LibreOffice não exista no servidor)
+        try:
+            cv = Converter(temp_pdf_path)
+            cv.convert(temp_docx_path, start=0, end=None)
+            cv.close()
+
+            with open(temp_docx_path, "rb") as f:
+                return f.read()
+        except Exception as e:
+            raise RuntimeError(f"Erro crítico na extração do documento: {e}")
 
 
 # ==========================================
 # Interface do Usuário (Streamlit UI)
 # ==========================================
 def main():
-    # Título e Subtítulo Centralizados
     st.markdown(
         "<h2 style='text-align: center; font-size: 1.6rem; margin-top: 0;'>Conversor PDF p/ Docx</h2>",
         unsafe_allow_html=True,
@@ -286,31 +288,27 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Bloco Centralizado (50% de largura da tela)
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        # Modo de Conversão - Agora com a Terceira Opção
         modo = st.radio(
             "Escolha o modo de conversão:",
             options=[
                 "Cópia Fiel (Para Impressão: layout idêntico)",
                 "Texto Editável (Texto limpo sem imagens)",
-                "Fiel e Editável (Layout original e Textos Nativos)" # <-- Nova Opção aqui!
+                "Fiel e Editável (Layout original e Textos Nativos)"
             ],
-            index=2, # Deixando a nova opção avançada como padrão
+            index=2,
         )
 
-        # Upload de Arquivo
         pdf_file = st.file_uploader(
             " ",
             type="pdf",
             label_visibility="collapsed",
         )
 
-        # Processamento, Alerta e Botão de Download dentro da coluna de 50%
         if pdf_file:
-            with st.spinner("Convertendo arquivo..."):
+            with st.spinner("Analisando blocos e convertendo documento... Isso pode levar alguns segundos."):
                 try:
                     pdf_file.seek(0)
 
@@ -324,9 +322,7 @@ def main():
                         docx_bytes = modo_fiel_editavel(pdf_file)
                         nome_sufixo = "fiel_editavel_nativo"
 
-                    st.success(
-                        "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
-                    )
+                    st.success("Arquivo convertido com sucesso!")
 
                     st.download_button(
                         label="Baixar Docx",
@@ -344,29 +340,13 @@ if __name__ == "__main__":
 
     st.markdown("""
 <style>
-    .main {
-        background-color: #ffffff;
-        color: #333333;
-    }
-    .block-container {
-        padding-top: 1rem;
-        padding-bottom: 0rem;
-    }
+    .main {background-color: #ffffff; color: #333333;}
+    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
     header {display: none !important;}
     footer {display: none !important;}
     #MainMenu {display: none !important;}
-    div[data-testid="stAppViewBlockContainer"] {
-        padding-top: 0 !important;
-        padding-bottom: 0 !important;
-    }
-    div[data-testid="stVerticalBlock"] {
-        gap: 0 !important;
-        padding-top: 0 !important;
-        padding-bottom: 0 !important;
-    }
-    .element-container {
-        margin-top: 0 !important;
-        margin-bottom: 0 !important;
-    }
+    div[data-testid="stAppViewBlockContainer"] {padding-top: 0 !important; padding-bottom: 0 !important;}
+    div[data-testid="stVerticalBlock"] {gap: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;}
+    .element-container {margin-top: 0 !important; margin-bottom: 0 !important;}
 </style>
 """, unsafe_allow_html=True)
