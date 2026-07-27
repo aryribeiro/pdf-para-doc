@@ -215,24 +215,80 @@ def modo_texto_editavel(pdf_file):
     docx_buffer.seek(0)
     return docx_buffer.read()
 
+import io
+import os
+import re
+import tempfile
+import fitz  # PyMuPDF
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+import docx.oxml as oxml
+import docx.opc.constants as opc
+from PIL import Image
+from pypdf import PdfWriter
+import pytesseract
+import streamlit as st
+
+# Helper para criar links clicáveis nativos no Word
+def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
+    part = paragraph.part
+    r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    
+    hyperlink = oxml.parse_xml(
+        f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" r:id="{r_id}"/>'
+    )
+    new_run = oxml.parse_xml(
+        f'<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    rPr = oxml.parse_xml(
+        f'<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    
+    if color:
+        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
+        rPr.append(c)
+    if underline:
+        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
+        rPr.append(u)
+        
+    new_run.append(rPr)
+    text_node = oxml.parse_xml(f'<w:t xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{text}</w:t>')
+    new_run.append(text_node)
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
+
+
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Versão Otimizada com Estilos Nativos)
+# MÓDULO 3: Fiel e Editável (Com Títulos Pretos, Links e Linhas)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
-    """
-    Motor com clustering de linhas por Y, detecção de títulos estruturais (Headings)
-    e normalização tipográfica sem tabelas fantasma.
-    """
     pdf_bytes = pdf_file.read()
     doc_word = Document()
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for page_idx in range(len(pdf_doc)):
         page = pdf_doc[page_idx]
+        
+        # 1. Extração de Links
+        links_pagina = page.get_links()
+        
+        # 2. Extração de Linhas/Vetores
+        desenhos = page.get_drawings()
+        linhas_y = []
+        for d in desenhos:
+            for item in d.get("items", []):
+                if item[0] in ("l", "r"):  # Linhas ou Retângulos
+                    rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
+                    # Verifica se é uma linha horizontal longa
+                    if rect.width > 100 and rect.height < 5:
+                        linhas_y.append(rect.y0)
+        linhas_y.sort()
+
+        # 3. Extração de Texto por Blocos
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
 
         for b in blocks:
-            if b.get("type") != 0:  # Ignora elementos que não são texto
+            if b.get("type") != 0:
                 continue
 
             lines = b["lines"]
@@ -245,6 +301,7 @@ def modo_fiel_editavel(pdf_file):
                 e_bold = False
                 e_italic = False
                 tamanho_max = 0.0
+                bbox_linha = l["bbox"]
 
                 for span in l["spans"]:
                     t = span["text"]
@@ -262,27 +319,40 @@ def modo_fiel_editavel(pdf_file):
                 if not line_str:
                     continue
 
-                # Otimização tipográfica: Garante espaço após números de listas (ex: "10.Certificações" -> "10. Certificações")
                 line_str = re.sub(r"^(\d+\.)([A-Za-zÀ-ÿ])", r"\1 \2", line_str)
 
-                bbox = l["bbox"]
-                y0, y1 = bbox[1], bbox[3]
+                y0, y1 = bbox_linha[1], bbox_linha[3]
 
-                # Identificação semântica do bloco
+                # Desenha linha divisória se houver um vetor próximo no Y
+                if linhas_y and any(abs(y0 - ly) < 8 for ly in linhas_y):
+                    p_linha = doc_word.add_paragraph()
+                    p_linha.paragraph_format.space_before = Pt(6)
+                    p_linha.paragraph_format.space_after = Pt(6)
+                    p_linha_run = p_linha.add_run("―" * 45)
+                    p_linha_run.font.color.rgb = RGBColor(180, 180, 180)
+
+                # Identificação semântica
                 e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
                 e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
                 e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
 
-                # Decisão: Novo Parágrafo ou Unir ao Anterior?
+                # Verifica se a linha possui link
+                uri_link = None
+                rect_linha = fitz.Rect(bbox_linha)
+                for link in links_pagina:
+                    if link.get("page") == page_idx or "uri" in link:
+                        if rect_linha.intersects(link["from"]):
+                            uri_link = link.get("uri")
+                            break
+
+                # Decisão de Parágrafo
                 criar_novo_p = True
                 if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
                     distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
-                    # Unifica linhas contínuas do mesmo parágrafo
                     if distancia_vertical < (tamanho_max * 1.4) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
                         criar_novo_p = False
 
                 if criar_novo_p:
-                    # Aplica estilos nativos do Word para títulos e listas
                     if e_titulo_principal:
                         p_atual = doc_word.add_paragraph(style='Heading 1')
                         p_atual.paragraph_format.space_before = Pt(12)
@@ -299,17 +369,17 @@ def modo_fiel_editavel(pdf_file):
                         if e_bullet:
                             fmt.left_indent = Inches(0.25)
 
-                    run = p_atual.add_run(line_str)
+                if uri_link:
+                    adicionar_link_clicavel(p_atual, uri_link, line_str)
                 else:
-                    run = p_atual.add_run(" " + line_str)
-
-                # Formatação visual complementar
-                run.font.name = "Arial"
-                if not (e_titulo_principal or e_subtitulo):
+                    run = p_atual.add_run(line_str if criar_novo_p else " " + line_str)
+                    run.font.name = "Arial"
                     run.font.size = Pt(max(9, min(24, int(tamanho_max))))
-                
-                run.bold = e_bold
-                run.italic = e_italic
+                    
+                    # Força a cor PRETA para todos os títulos e textos normais
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+                    run.bold = e_bold
+                    run.italic = e_italic
 
                 ultimo_y1 = y1
                 ultimo_tamanho_fonte = tamanho_max
@@ -321,7 +391,6 @@ def modo_fiel_editavel(pdf_file):
     doc_word.save(docx_buffer)
     docx_buffer.seek(0)
     return docx_buffer.read()
-
 
 # ==========================================
 # Interface do Usuário (Streamlit UI)
