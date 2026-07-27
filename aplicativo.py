@@ -215,15 +215,13 @@ def modo_texto_editavel(pdf_file):
     docx_buffer.seek(0)
     return docx_buffer.read()
 
-
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Motor de Layout Inteligente sem Tabelas)
+# MÓDULO 3: Fiel e Editável (Versão Otimizada com Estilos Nativos)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     """
-    Motor baseado na melhor prática do GitHub:
-    Extrai blocos nativos, identifica tópicos/bullets, faz clustering de linhas por Y 
-    e nunca cria tabelas fantasma nem adiciona caracteres '|'.
+    Motor com clustering de linhas por Y, detecção de títulos estruturais (Headings)
+    e normalização tipográfica sem tabelas fantasma.
     """
     pdf_bytes = pdf_file.read()
     doc_word = Document()
@@ -234,7 +232,7 @@ def modo_fiel_editavel(pdf_file):
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
 
         for b in blocks:
-            if b.get("type") != 0:  # Ignora elementos não-texto
+            if b.get("type") != 0:  # Ignora elementos que não são texto
                 continue
 
             lines = b["lines"]
@@ -264,37 +262,52 @@ def modo_fiel_editavel(pdf_file):
                 if not line_str:
                     continue
 
+                # Otimização tipográfica: Garante espaço após números de listas (ex: "10.Certificações" -> "10. Certificações")
+                line_str = re.sub(r"^(\d+\.)([A-Za-zÀ-ÿ])", r"\1 \2", line_str)
+
                 bbox = l["bbox"]
                 y0, y1 = bbox[1], bbox[3]
 
-                # Identifica se é tópico/bullet ou título
+                # Identificação semântica do bloco
                 e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
-                e_titulo = tamanho_max >= 13.0 or (e_bold and len(line_str) < 50)
+                e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
+                e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
 
-                # Decisão Inteligente: Criar novo parágrafo ou unir ao anterior?
+                # Decisão: Novo Parágrafo ou Unir ao Anterior?
                 criar_novo_p = True
-                if p_atual is not None and not e_bullet and not e_titulo:
+                if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
                     distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
-                    # Se o espaço vertical for de uma linha normal, une o texto ao parágrafo
-                    if distancia_vertical < (tamanho_max * 1.5) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
+                    # Unifica linhas contínuas do mesmo parágrafo
+                    if distancia_vertical < (tamanho_max * 1.4) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
                         criar_novo_p = False
 
                 if criar_novo_p:
-                    p_atual = doc_word.add_paragraph()
-                    fmt = p_atual.paragraph_format
-                    fmt.space_before = Pt(2)
-                    fmt.space_after = Pt(2)
-
-                    if e_bullet:
-                        fmt.left_indent = Inches(0.25)
+                    # Aplica estilos nativos do Word para títulos e listas
+                    if e_titulo_principal:
+                        p_atual = doc_word.add_paragraph(style='Heading 1')
+                        p_atual.paragraph_format.space_before = Pt(12)
+                        p_atual.paragraph_format.space_after = Pt(4)
+                    elif e_subtitulo:
+                        p_atual = doc_word.add_paragraph(style='Heading 2')
+                        p_atual.paragraph_format.space_before = Pt(8)
+                        p_atual.paragraph_format.space_after = Pt(3)
+                    else:
+                        p_atual = doc_word.add_paragraph()
+                        fmt = p_atual.paragraph_format
+                        fmt.space_before = Pt(2)
+                        fmt.space_after = Pt(2)
+                        if e_bullet:
+                            fmt.left_indent = Inches(0.25)
 
                     run = p_atual.add_run(line_str)
                 else:
-                    # Concatena a linha de forma contínua com espaço
                     run = p_atual.add_run(" " + line_str)
 
+                # Formatação visual complementar
                 run.font.name = "Arial"
-                run.font.size = Pt(max(9, min(24, int(tamanho_max))))
+                if not (e_titulo_principal or e_subtitulo):
+                    run.font.size = Pt(max(9, min(24, int(tamanho_max))))
+                
                 run.bold = e_bold
                 run.italic = e_italic
 
