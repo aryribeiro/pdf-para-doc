@@ -6,8 +6,7 @@ import subprocess
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Pt
-from pdf2docx import Converter
+from docx.shared import Pt, Inches
 from PIL import Image
 from pypdf import PdfWriter
 import pytesseract
@@ -121,6 +120,7 @@ def modo_copia_fiel(pdf_file):
     temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
 
     try:
+        from pdf2docx import Converter
         cv = Converter(temp_ocr_pdf_path)
         cv.convert(temp_docx_path, start=0, end=None)
         cv.close()
@@ -217,27 +217,27 @@ def modo_texto_editavel(pdf_file):
     docx_buffer.seek(0)
     return docx_buffer.read()
 
+
 # ==========================================
-# MÓDULO 3: NOVO - Fiel e Editável (Motor Híbrido Padrão Ouro)
+# MÓDULO 3: Fiel e Editável (100% Grátis - Sem Tabelas Fantasma)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     """
-    Motor híbrido: Tenta usar o LibreOffice (Enterprise) para garantir 
-    estruturas fiéis. Se não estiver instalado, faz fallback seguro pro pdf2docx.
+    Extração estrutural por blocos nativos via PyMuPDF (100% local e gratuita).
+    Preserva parágrafos, listas com marcadores e formatação sem aglutinar linhas
+    ou criar tabelas fictícias.
     """
     pdf_bytes = pdf_file.read()
     
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_pdf_path = os.path.join(temp_dir, "input.pdf")
-        with open(temp_pdf_path, "wb") as f:
-            f.write(pdf_bytes)
+    # 1. Tenta conversão via LibreOffice caso instalado no servidor (Grátis)
+    lo_path = shutil.which("soffice") or shutil.which("libreoffice")
+    if lo_path:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_pdf_path = os.path.join(temp_dir, "input.pdf")
+            with open(temp_pdf_path, "wb") as f:
+                f.write(pdf_bytes)
 
-        temp_docx_path = os.path.join(temp_dir, "input.docx")
-
-        # 1. Tentativa Primária: LibreOffice Headless (Não quebra listas e parágrafos)
-        lo_path = shutil.which("soffice") or shutil.which("libreoffice")
-        
-        if lo_path:
+            temp_docx_path = os.path.join(temp_dir, "input.docx")
             try:
                 subprocess.run(
                     [
@@ -252,25 +252,63 @@ def modo_fiel_editavel(pdf_file):
                     check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    timeout=90
+                    timeout=60
                 )
-                
                 if os.path.exists(temp_docx_path):
                     with open(temp_docx_path, "rb") as f:
                         return f.read()
-            except Exception as e:
-                print(f"Aviso: LibreOffice falhou ({e}). Tentando fallback...")
+            except Exception:
+                pass  # Migra para o parser PyMuPDF se falhar
 
-        # 2. Fallback Secundário: pdf2docx (Caso LibreOffice não exista no servidor)
-        try:
-            cv = Converter(temp_pdf_path)
-            cv.convert(temp_docx_path, start=0, end=None)
-            cv.close()
+    # 2. Reconstrução determinística em Python Puro (Garantia Local)
+    doc_word = Document()
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-            with open(temp_docx_path, "rb") as f:
-                return f.read()
-        except Exception as e:
-            raise RuntimeError(f"Erro crítico na extração do documento: {e}")
+    for page_idx in range(len(pdf_doc)):
+        page = pdf_doc[page_idx]
+        blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
+
+        for b in blocks:
+            if b.get("type") == 0:  # Bloco de texto
+                for l in b["lines"]:
+                    texto_linha = ""
+                    e_bold = False
+                    tamanho_max = 10.0
+
+                    for span in l["spans"]:
+                        texto_linha += span["text"]
+                        nome_fonte = span["font"].lower()
+                        if "bold" in nome_fonte or "black" in nome_fonte or "heavy" in nome_fonte:
+                            e_bold = True
+                        if span["size"] > tamanho_max:
+                            tamanho_max = span["size"]
+
+                    texto_clean = texto_linha.strip()
+                    if not texto_clean:
+                        continue
+
+                    # Cria parágrafo limpo no Word
+                    p = doc_word.add_paragraph()
+
+                    # Trata listas com marcadores (bullets) sem criar colunas/tabelas
+                    if texto_clean.startswith("•") or texto_clean.startswith("- "):
+                        p.paragraph_format.left_indent = Inches(0.25)
+
+                    run = p.add_run(texto_clean)
+                    run.font.name = "Arial"
+                    run.font.size = Pt(max(9, min(24, int(tamanho_max))))
+                    run.bold = e_bold
+
+                    p.paragraph_format.space_after = Pt(3)
+                    p.paragraph_format.space_before = Pt(0)
+
+        if page_idx < len(pdf_doc) - 1:
+            doc_word.add_page_break()
+
+    docx_buffer = io.BytesIO()
+    doc_word.save(docx_buffer)
+    docx_buffer.seek(0)
+    return docx_buffer.read()
 
 
 # ==========================================
@@ -308,7 +346,7 @@ def main():
         )
 
         if pdf_file:
-            with st.spinner("Analisando blocos e convertendo documento... Isso pode levar alguns segundos."):
+            with st.spinner("Processando e convertendo documento..."):
                 try:
                     pdf_file.seek(0)
 

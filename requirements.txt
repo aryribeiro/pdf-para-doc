@@ -1,6 +1,5 @@
 streamlit
 python-docx
-pdf2docx
 pytesseract
 Pillow
 PyMuPDF
