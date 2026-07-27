@@ -154,7 +154,6 @@ def limpar_linha(texto_linha):
     if any(termo in l_lower for termo in blacklist):
         return None
 
-    # Remove marcadores e caracteres estranhos
     texto_limpo = re.sub(
         r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
     )
@@ -242,6 +241,34 @@ def modo_texto_editavel(pdf_file):
     docx_buffer.seek(0)
     return docx_buffer.read()
 
+# ==========================================
+# MÓDULO 3: NOVO - Fiel e Editável (Para PDFs Nativos)
+# ==========================================
+def modo_fiel_editavel(pdf_file):
+    """Usa o pdf2docx no arquivo original nativo sem aplicar OCR. 
+       Preserva tabelas, vetores, fontes reais e todo o layout editável estruturado."""
+    pdf_bytes = pdf_file.read()
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+        temp_pdf.write(pdf_bytes)
+        temp_pdf_path = temp_pdf.name
+
+    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
+
+    try:
+        # Extração direta estrutural da biblioteca
+        cv = Converter(temp_pdf_path)
+        cv.convert(temp_docx_path, start=0, end=None)
+        cv.close()
+
+        with open(temp_docx_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
+
 
 # ==========================================
 # Interface do Usuário (Streamlit UI)
@@ -263,14 +290,15 @@ def main():
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        # Modo de Conversão
+        # Modo de Conversão - Agora com a Terceira Opção
         modo = st.radio(
             "Escolha o modo de conversão:",
             options=[
                 "Cópia Fiel (Para Impressão: layout idêntico)",
                 "Texto Editável (Texto limpo sem imagens)",
+                "Fiel e Editável (Layout original e Textos Nativos)" # <-- Nova Opção aqui!
             ],
-            index=0,
+            index=2, # Deixando a nova opção avançada como padrão
         )
 
         # Upload de Arquivo
@@ -286,12 +314,15 @@ def main():
                 try:
                     pdf_file.seek(0)
 
-                    if "Cópia Fiel" in modo:
+                    if "Cópia Fiel (Para Impressão" in modo:
                         docx_bytes = modo_copia_fiel(pdf_file)
                         nome_sufixo = "copia_fiel"
-                    else:
+                    elif "Texto Editável" in modo:
                         docx_bytes = modo_texto_editavel(pdf_file)
                         nome_sufixo = "editavel"
+                    else:
+                        docx_bytes = modo_fiel_editavel(pdf_file)
+                        nome_sufixo = "fiel_editavel_nativo"
 
                     st.success(
                         "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
