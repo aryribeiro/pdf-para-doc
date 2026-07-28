@@ -93,38 +93,62 @@ st.markdown(
 )
 
 
-# Helper para criar links clicáveis mantendo a fonte, tamanho e cor NATIVAS do PDF
-def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_pt=11, hex_color="0000FF", is_bold=False, is_italic=False, underline=True):
+# Helper para criar links clicáveis preservando integralmente a fonte, tamanho e cor do PDF
+def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_pt=11.0, color_hex="0000FF", is_bold=False, is_italic=False, underline=True):
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
-    
-    sz_val = int(font_size_pt * 2)
-    b_tag = "<w:b/>" if is_bold else ""
-    i_tag = "<w:i/>" if is_italic else ""
-    u_tag = '<w:u w:val="single"/>' if underline else ""
     
     hyperlink = oxml.parse_xml(
         f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-        f'r:id="{r_id}">\n'
-        f'  <w:r>\n'
-        f'    <w:rPr>\n'
-        f'      <w:rFonts w:ascii="{font_name}" w:hAnsi="{font_name}" w:cs="{font_name}"/>\n'
-        f'      <w:sz w:val="{sz_val}"/>\n'
-        f'      <w:szCs w:val="{sz_val}"/>\n'
-        f'      <w:color w:val="{hex_color}"/>\n'
-        f'      {b_tag}\n'
-        f'      {i_tag}\n'
-        f'      {u_tag}\n'
-        f'    </w:rPr>\n'
-        f'    <w:t xml:space="preserve">{text}</w:t>\n'
-        f'  </w:r>\n'
-        f'</w:hyperlink>'
+        f'r:id="{r_id}"/>'
     )
+    new_run = oxml.parse_xml(
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    rPr = oxml.parse_xml(
+        '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    
+    if font_name:
+        rFont = oxml.parse_xml(
+            f'<w:rFonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            f'w:ascii="{font_name}" w:hAnsi="{font_name}" w:cs="{font_name}"/>'
+        )
+        rPr.append(rFont)
+    if font_size_pt:
+        sz_val = int(font_size_pt * 2)
+        sz = oxml.parse_xml(
+            f'<w:sz xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{sz_val}"/>'
+        )
+        rPr.append(sz)
+    if color_hex:
+        c = oxml.parse_xml(
+            f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color_hex}"/>'
+        )
+        rPr.append(c)
+    if is_bold:
+        b = oxml.parse_xml('<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
+        rPr.append(b)
+    if is_italic:
+        i = oxml.parse_xml('<w:i xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
+        rPr.append(i)
+    if underline:
+        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
+        rPr.append(u)
+        
+    new_run.append(rPr)
+    
+    text_node = oxml.OxmlElement('w:t')
+    text_node.set(oxml.ns.qn('xml:space'), 'preserve')
+    text_node.text = text
+    new_run.append(text_node)
+    
+    hyperlink.append(new_run)
     paragraph._p.append(hyperlink)
 
 
-# Helper para injetar linha divisória vetorial nativa no Word
+# Helper para injetar linha divisória vetorial nativa no Word via OpenXML
 def adicionar_linha_horizontal(paragraph, color_hex="000000"):
     pPr = paragraph._p.get_or_add_pPr()
     pbdr = oxml.parse_xml(
@@ -136,7 +160,7 @@ def adicionar_linha_horizontal(paragraph, color_hex="000000"):
 
 
 # ==========================================
-# MÓDULO 1: Cópia Fiel (Para Impressão) - MANTIDO INTACTO
+# MÓDULO 1: Cópia Fiel (Para Impressão) - INTACTO
 # ==========================================
 def modo_copia_fiel(pdf_file):
     pdf_bytes = pdf_file.read()
@@ -162,11 +186,7 @@ def modo_copia_fiel(pdf_file):
     temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
 
     try:
-        try:
-            from pdf2docx import Converter
-        except ImportError:
-            raise RuntimeError("A biblioteca 'pdf2docx' precisa estar instalada no ambiente para o Módulo 1.")
-
+        from pdf2docx import Converter
         cv = Converter(temp_ocr_pdf_path)
         cv.convert(temp_docx_path, start=0, end=None)
         cv.close()
@@ -181,7 +201,7 @@ def modo_copia_fiel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 2: Texto Editável (Limpeza de Artefatos) - MANTIDO INTACTO
+# MÓDULO 2: Texto Editável (Limpeza de Artefatos) - INTACTO
 # ==========================================
 def limpar_linha(texto_linha):
     if not texto_linha:
@@ -265,14 +285,14 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (PRESERVAÇÃO RIGOROSA DE LINHAS FÍSICAS)
+# MÓDULO 3: Fiel e Editável (ALTA FIDELIDADE 1:1 LINHA POR LINHA)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     pdf_bytes = pdf_file.read()
     doc_word = Document()
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # Configuração de margens da seção
+    # Configuração uniforme de margens para a seção
     for section in doc_word.sections:
         section.top_margin = Pt(36)
         section.bottom_margin = Pt(36)
@@ -283,13 +303,13 @@ def modo_fiel_editavel(pdf_file):
         page = pdf_doc[page_idx]
         links_pagina = page.get_links()
 
-        # 1. Rastreamento de Linhas Divisórias Vetoriais
+        # 1. Rastreamento de Vetores/Linhas Horizontais
         linhas_vetoriais = []
         for d in page.get_drawings():
             for item in d.get("items", []):
                 if item[0] in ("l", "r"):
                     rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    if rect.width > 30 and rect.height < 10:
+                    if rect.width > 20 and rect.height < 10:
                         color = d.get("color") or d.get("fill")
                         rgb_hex = "000000"
                         if color and len(color) == 3:
@@ -302,45 +322,44 @@ def modo_fiel_editavel(pdf_file):
                             "color": rgb_hex
                         })
 
-        # 2. Extração Física das Linhas de Texto
+        # 2. Rastreamento Físico de Linhas de Texto (Sem Fusão)
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
-        elementos = []
-
-        for lv in linhas_vetoriais:
-            elementos.append(lv)
+        elementos_texto = []
 
         for b in blocks:
-            if b.get("type") == 0:  # Bloco de texto
+            if b.get("type") == 0:
                 for line in b["lines"]:
                     spans = line["spans"]
                     if not spans:
                         continue
                     
-                    line_text = "".join([s["text"] for s in spans])
-                    if not line_text.strip():
+                    line_text = "".join([s["text"] for s in spans]).strip()
+                    if not line_text:
                         continue
 
-                    elementos.append({
-                        "type": "text_line",
+                    elementos_texto.append({
+                        "type": "text",
                         "y0": line["bbox"][1],
+                        "y1": line["bbox"][3],
                         "line": line
                     })
 
-        # Ordenação vertical estrita (Top -> Bottom)
+        # Intercalação de elementos visuais ordenados estritamente pelo eixo vertical (Y)
+        elementos = linhas_vetoriais + elementos_texto
         elementos.sort(key=lambda x: x["y0"])
 
-        ultimo_y0 = None
+        ultimo_y1 = None
 
         for el in elementos:
             if el["type"] == "line":
-                p_linha = doc_word.add_paragraph()
-                p_linha.paragraph_format.space_before = Pt(2)
-                p_linha.paragraph_format.space_after = Pt(2)
-                adicionar_linha_horizontal(p_linha, el["color"])
-                ultimo_y0 = el["y0"]
+                p_line = doc_word.add_paragraph()
+                p_line.paragraph_format.space_before = Pt(2)
+                p_line.paragraph_format.space_after = Pt(2)
+                adicionar_linha_horizontal(p_line, el["color"])
+                ultimo_y1 = el["y0"] + 2
                 continue
 
-            # Renderização de cada linha física em um Parágrafo próprio
+            # Renderização de cada Linha em um Parágrafo Próprio (Evita mesclagem)
             line = el["line"]
             spans = line["spans"]
 
@@ -348,9 +367,9 @@ def modo_fiel_editavel(pdf_file):
             p_fmt = p.paragraph_format
 
             y0 = el["y0"]
-            if ultimo_y0 is not None:
-                gap = y0 - ultimo_y0
-                space_pt = max(0, min(14, gap - 8))
+            if ultimo_y1 is not None:
+                gap = y0 - ultimo_y1
+                space_pt = max(0, min(18, gap - 6))
                 p_fmt.space_before = Pt(space_pt)
             else:
                 p_fmt.space_before = Pt(0)
@@ -358,18 +377,18 @@ def modo_fiel_editavel(pdf_file):
             p_fmt.space_after = Pt(1)
 
             for s in spans:
-                texto = s["text"]
-                if not texto:
+                text = s["text"]
+                if not text:
                     continue
 
-                fonte_raw = s["font"]
-                fonte_clean = fonte_raw.split('+')[-1].split('-')[0]
-                if not fonte_clean or fonte_clean.lower() in ["default", "none"]:
-                    fonte_clean = "Arial"
+                font_raw = s["font"]
+                font_clean = font_raw.split("+")[-1].split("-")[0]
+                if not font_clean or font_clean.lower() in ["default", "none"]:
+                    font_clean = "Arial"
 
-                fonte_size = s["size"]
-                e_bold = any(k in fonte_raw.lower() for k in ["bold", "black", "heavy"])
-                e_italic = any(k in fonte_raw.lower() for k in ["italic", "oblique"])
+                font_size = s["size"]
+                e_bold = any(k in font_raw.lower() for k in ["bold", "black", "heavy"])
+                e_italic = any(k in font_raw.lower() for k in ["italic", "oblique"])
 
                 c_val = s["color"]
                 r = (c_val >> 16) & 255
@@ -377,7 +396,7 @@ def modo_fiel_editavel(pdf_file):
                 b_col = c_val & 255
                 hex_color = f"{r:02x}{g:02x}{b_col:02x}"
 
-                # Mapeamento de links mantendo estilo nativo
+                # Mapeamento de Links mantendo estilos idênticos ao PDF
                 uri_link = None
                 span_rect = fitz.Rect(s["bbox"])
                 for link in links_pagina:
@@ -388,23 +407,23 @@ def modo_fiel_editavel(pdf_file):
 
                 if uri_link:
                     adicionar_link_clicavel(
-                        p, uri_link, texto,
-                        font_name=fonte_clean,
-                        font_size_pt=fonte_size,
-                        hex_color=hex_color,
+                        p, uri_link, text,
+                        font_name=font_clean,
+                        font_size_pt=font_size,
+                        color_hex=hex_color,
                         is_bold=e_bold,
                         is_italic=e_italic,
                         underline=True
                     )
                 else:
-                    run = p.add_run(texto)
-                    run.font.name = fonte_clean
-                    run.font.size = Pt(fonte_size)
+                    run = p.add_run(text)
+                    run.font.name = font_clean
+                    run.font.size = Pt(font_size)
                     run.font.color.rgb = RGBColor(r, g, b_col)
                     run.bold = e_bold
                     run.italic = e_italic
 
-            ultimo_y0 = line["bbox"][3]
+            ultimo_y1 = el["y1"]
 
         if page_idx < len(pdf_doc) - 1:
             doc_word.add_page_break()
