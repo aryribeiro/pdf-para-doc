@@ -4,7 +4,9 @@ import re
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
+import docx.oxml as oxml
+import docx.opc.constants as opc
 from PIL import Image
 from pypdf import PdfWriter
 import pytesseract
@@ -89,6 +91,41 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
+def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
+    part = paragraph.part
+    r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    
+    hyperlink = oxml.parse_xml(
+        f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        f'r:id="{r_id}"/>'
+    )
+    new_run = oxml.parse_xml(
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    rPr = oxml.parse_xml(
+        '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    
+    if color:
+        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
+        rPr.append(c)
+    if underline:
+        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
+        rPr.append(u)
+        
+    new_run.append(rPr)
+    
+    # Cria nó de texto de forma segura para evitar erros de parser
+    text_node = oxml.OxmlElement('w:t')
+    text_node.text = text
+    new_run.append(text_node)
+    
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
 
 
 # ==========================================
@@ -215,51 +252,9 @@ def modo_texto_editavel(pdf_file):
     docx_buffer.seek(0)
     return docx_buffer.read()
 
-import io
-import os
-import re
-import tempfile
-import fitz  # PyMuPDF
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-import docx.oxml as oxml
-import docx.opc.constants as opc
-from PIL import Image
-from pypdf import PdfWriter
-import pytesseract
-import streamlit as st
-
-# Helper para criar links clicáveis nativos no Word
-def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
-    part = paragraph.part
-    r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
-    
-    hyperlink = oxml.parse_xml(
-        f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" r:id="{r_id}"/>'
-    )
-    new_run = oxml.parse_xml(
-        f'<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    rPr = oxml.parse_xml(
-        f'<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    
-    if color:
-        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
-        rPr.append(c)
-    if underline:
-        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
-        rPr.append(u)
-        
-    new_run.append(rPr)
-    text_node = oxml.parse_xml(f'<w:t xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{text}</w:t>')
-    new_run.append(text_node)
-    hyperlink.append(new_run)
-    paragraph._p.append(hyperlink)
-
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Com Títulos Pretos, Links e Linhas)
+# MÓDULO 3: Fiel e Editável (Títulos Pretos, Links e Linhas)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     pdf_bytes = pdf_file.read()
@@ -272,19 +267,18 @@ def modo_fiel_editavel(pdf_file):
         # 1. Extração de Links
         links_pagina = page.get_links()
         
-        # 2. Extração de Linhas/Vetores
+        # 2. Extração de Linhas/Vetores Divisórios
         desenhos = page.get_drawings()
         linhas_y = []
         for d in desenhos:
             for item in d.get("items", []):
-                if item[0] in ("l", "r"):  # Linhas ou Retângulos
+                if item[0] in ("l", "r"):
                     rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    # Verifica se é uma linha horizontal longa
                     if rect.width > 100 and rect.height < 5:
                         linhas_y.append(rect.y0)
         linhas_y.sort()
 
-        # 3. Extração de Texto por Blocos
+        # 3. Extração do Texto por Blocos
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
 
         for b in blocks:
@@ -323,7 +317,7 @@ def modo_fiel_editavel(pdf_file):
 
                 y0, y1 = bbox_linha[1], bbox_linha[3]
 
-                # Desenha linha divisória se houver um vetor próximo no Y
+                # Renderiza linha divisória se houver vetor próximo
                 if linhas_y and any(abs(y0 - ly) < 8 for ly in linhas_y):
                     p_linha = doc_word.add_paragraph()
                     p_linha.paragraph_format.space_before = Pt(6)
@@ -331,12 +325,12 @@ def modo_fiel_editavel(pdf_file):
                     p_linha_run = p_linha.add_run("―" * 45)
                     p_linha_run.font.color.rgb = RGBColor(180, 180, 180)
 
-                # Identificação semântica
+                # Classificação Semântica
                 e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
                 e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
                 e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
 
-                # Verifica se a linha possui link
+                # Verifica existência de link associado à linha
                 uri_link = None
                 rect_linha = fitz.Rect(bbox_linha)
                 for link in links_pagina:
@@ -345,7 +339,7 @@ def modo_fiel_editavel(pdf_file):
                             uri_link = link.get("uri")
                             break
 
-                # Decisão de Parágrafo
+                # Estruturação de Parágrafos
                 criar_novo_p = True
                 if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
                     distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
@@ -376,7 +370,7 @@ def modo_fiel_editavel(pdf_file):
                     run.font.name = "Arial"
                     run.font.size = Pt(max(9, min(24, int(tamanho_max))))
                     
-                    # Força a cor PRETA para todos os títulos e textos normais
+                    # Força a cor PRETA para todos os textos/títulos
                     run.font.color.rgb = RGBColor(0, 0, 0)
                     run.bold = e_bold
                     run.italic = e_italic
@@ -391,6 +385,7 @@ def modo_fiel_editavel(pdf_file):
     doc_word.save(docx_buffer)
     docx_buffer.seek(0)
     return docx_buffer.read()
+
 
 # ==========================================
 # Interface do Usuário (Streamlit UI)
