@@ -265,14 +265,14 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável - PRESERVAÇÃO RIGOROSA DE LINHAS E ESTILOS
+# MÓDULO 3: Fiel e Editável (PRESERVAÇÃO RIGOROSA DE LINHAS FÍSICAS)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     pdf_bytes = pdf_file.read()
     doc_word = Document()
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # Configura margens padrão da página
+    # Configuração de margens da seção
     for section in doc_word.sections:
         section.top_margin = Pt(36)
         section.bottom_margin = Pt(36)
@@ -302,7 +302,7 @@ def modo_fiel_editavel(pdf_file):
                             "color": rgb_hex
                         })
 
-        # 2. Extração Física de Linhas de Texto (Sem fusão/junção de linhas)
+        # 2. Extração Física das Linhas de Texto
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
         elementos = []
 
@@ -326,7 +326,7 @@ def modo_fiel_editavel(pdf_file):
                         "line": line
                     })
 
-        # Ordena rigorosamente de cima para baixo pela coordenada Y
+        # Ordenação vertical estrita (Top -> Bottom)
         elementos.sort(key=lambda x: x["y0"])
 
         ultimo_y0 = None
@@ -340,7 +340,7 @@ def modo_fiel_editavel(pdf_file):
                 ultimo_y0 = el["y0"]
                 continue
 
-            # Renderização de Linha de Texto Exata (1 Linha do PDF = 1 Parágrafo Word)
+            # Renderização de cada linha física em um Parágrafo próprio
             line = el["line"]
             spans = line["spans"]
 
@@ -355,7 +355,7 @@ def modo_fiel_editavel(pdf_file):
             else:
                 p_fmt.space_before = Pt(0)
 
-            p_fmt.space_after = Pt(1) # Mantém espaçamento entre linhas idêntico ao original
+            p_fmt.space_after = Pt(1)
 
             for s in spans:
                 texto = s["text"]
@@ -377,7 +377,7 @@ def modo_fiel_editavel(pdf_file):
                 b_col = c_val & 255
                 hex_color = f"{r:02x}{g:02x}{b_col:02x}"
 
-                # Mapeamento de Links mantendo estilo exato do span
+                # Mapeamento de links mantendo estilo nativo
                 uri_link = None
                 span_rect = fitz.Rect(s["bbox"])
                 for link in links_pagina:
