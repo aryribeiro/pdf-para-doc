@@ -93,7 +93,7 @@ st.markdown(
 )
 
 
-# Helper seguro para adicionar hiperlinks mantendo validação OpenXML
+# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
 def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
@@ -119,6 +119,7 @@ def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True
         
     new_run.append(rPr)
     
+    # Cria nó de texto de forma segura para evitar erros de parser
     text_node = oxml.OxmlElement('w:t')
     text_node.text = text
     new_run.append(text_node)
@@ -253,37 +254,31 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Engenho Semântico de Precisão)
+# MÓDULO 3: Fiel e Editável (Títulos Pretos, Links e Linhas)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     pdf_bytes = pdf_file.read()
     doc_word = Document()
-
-    # Ajusta margens limpas
-    for section in doc_word.sections:
-        section.top_margin = Inches(0.75)
-        section.bottom_margin = Inches(0.75)
-        section.left_margin = Inches(0.75)
-        section.right_margin = Inches(0.75)
-
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for page_idx in range(len(pdf_doc)):
         page = pdf_doc[page_idx]
+        
+        # 1. Extração de Links
         links_pagina = page.get_links()
-
-        # Captura vetores/linhas divisórias horizontais
+        
+        # 2. Extração de Linhas/Vetores Divisórios
         desenhos = page.get_drawings()
         linhas_y = []
         for d in desenhos:
             for item in d.get("items", []):
                 if item[0] in ("l", "r"):
                     rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    if rect.width > 120 and rect.height < 4:
+                    if rect.width > 100 and rect.height < 5:
                         linhas_y.append(rect.y0)
         linhas_y.sort()
 
-        # Extrai blocos de texto estruturados
+        # 3. Extração do Texto por Blocos
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
 
         for b in blocks:
@@ -291,29 +286,22 @@ def modo_fiel_editavel(pdf_file):
                 continue
 
             lines = b["lines"]
-            if not lines:
-                continue
-
             p_atual = None
-            prev_line_str = ""
-            prev_font_size = None
-            prev_bold = None
-            prev_line_width = 0
+            ultimo_y1 = None
+            ultimo_tamanho_fonte = None
 
             for l in lines:
-                bbox_linha = l["bbox"]
-                line_width = bbox_linha[2] - bbox_linha[0]
-                y0, y1 = bbox_linha[1], bbox_linha[3]
-
                 texto_linha = ""
                 e_bold = False
                 e_italic = False
                 tamanho_max = 0.0
+                bbox_linha = l["bbox"]
 
                 for span in l["spans"]:
                     t = span["text"]
                     texto_linha += t
                     fonte_nome = span["font"].lower()
+                    
                     if any(k in fonte_nome for k in ["bold", "black", "heavy"]):
                         e_bold = True
                     if any(k in fonte_nome for k in ["italic", "oblique"]):
@@ -325,10 +313,24 @@ def modo_fiel_editavel(pdf_file):
                 if not line_str:
                     continue
 
-                # Normalização tipográfica (ex: "10.Certificações" -> "10. Certificações")
                 line_str = re.sub(r"^(\d+\.)([A-Za-zÀ-ÿ])", r"\1 \2", line_str)
 
-                # Busca por hiperlink associado
+                y0, y1 = bbox_linha[1], bbox_linha[3]
+
+                # Renderiza linha divisória se houver vetor próximo
+                if linhas_y and any(abs(y0 - ly) < 8 for ly in linhas_y):
+                    p_linha = doc_word.add_paragraph()
+                    p_linha.paragraph_format.space_before = Pt(6)
+                    p_linha.paragraph_format.space_after = Pt(6)
+                    p_linha_run = p_linha.add_run("―" * 45)
+                    p_linha_run.font.color.rgb = RGBColor(180, 180, 180)
+
+                # Classificação Semântica
+                e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
+                e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
+                e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
+
+                # Verifica existência de link associado à linha
                 uri_link = None
                 rect_linha = fitz.Rect(bbox_linha)
                 for link in links_pagina:
@@ -337,63 +339,44 @@ def modo_fiel_editavel(pdf_file):
                             uri_link = link.get("uri")
                             break
 
-                # REGRAS SEMÂNTICAS DE QUEBRA DE LINHA
-                is_bullet = (
-                    line_str.startswith(("•", "-", "–", "*")) or 
-                    bool(re.match(r"^\d+[\.\)]\s", line_str)) or 
-                    bool(re.match(r"^(Etapa|Trilha)\s+\d+", line_str, re.IGNORECASE))
-                )
-                
-                prev_ended_with_colon = prev_line_str.endswith(":")
-                prev_was_short = 0 < prev_line_width < 280  # Linha curta no PDF = quebra manual intencional
-                font_changed = prev_font_size is not None and abs(tamanho_max - prev_font_size) > 1.2
-                bold_changed = prev_bold is not None and (e_bold != prev_bold)
+                # Estruturação de Parágrafos
+                criar_novo_p = True
+                if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
+                    distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
+                    if distancia_vertical < (tamanho_max * 1.4) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
+                        criar_novo_p = False
 
-                criar_novo_paragrafo = (
-                    p_atual is None or
-                    is_bullet or
-                    prev_ended_with_colon or
-                    prev_was_short or
-                    font_changed or
-                    bold_changed
-                )
-
-                # Desenha linha divisória se houver vetor próximo
-                if linhas_y and any(abs(y0 - ly) < 6 for ly in linhas_y):
-                    p_div = doc_word.add_paragraph()
-                    p_div.paragraph_format.space_before = Pt(4)
-                    p_div.paragraph_format.space_after = Pt(4)
-                    p_run = p_div.add_run("―" * 50)
-                    p_run.font.color.rgb = RGBColor(180, 180, 180)
-                    criar_novo_paragrafo = True
-
-                if criar_novo_paragrafo:
-                    p_atual = doc_word.add_paragraph()
-                    fmt = p_atual.paragraph_format
-                    fmt.space_before = Pt(3 if (font_changed or is_bullet) else 0)
-                    fmt.space_after = Pt(2)
-                    fmt.line_spacing = 1.15
-
-                    if is_bullet:
-                        fmt.left_indent = Inches(0.2)
-
-                texto_para_adicionar = line_str if criar_novo_paragrafo else " " + line_str
+                if criar_novo_p:
+                    if e_titulo_principal:
+                        p_atual = doc_word.add_paragraph(style='Heading 1')
+                        p_atual.paragraph_format.space_before = Pt(12)
+                        p_atual.paragraph_format.space_after = Pt(4)
+                    elif e_subtitulo:
+                        p_atual = doc_word.add_paragraph(style='Heading 2')
+                        p_atual.paragraph_format.space_before = Pt(8)
+                        p_atual.paragraph_format.space_after = Pt(3)
+                    else:
+                        p_atual = doc_word.add_paragraph()
+                        fmt = p_atual.paragraph_format
+                        fmt.space_before = Pt(2)
+                        fmt.space_after = Pt(2)
+                        if e_bullet:
+                            fmt.left_indent = Inches(0.25)
 
                 if uri_link:
-                    adicionar_link_clicavel(p_atual, uri_link, texto_para_adicionar)
+                    adicionar_link_clicavel(p_atual, uri_link, line_str)
                 else:
-                    run = p_atual.add_run(texto_para_adicionar)
+                    run = p_atual.add_run(line_str if criar_novo_p else " " + line_str)
                     run.font.name = "Arial"
-                    run.font.size = Pt(max(8, min(32, round(tamanho_max))))
-                    run.font.color.rgb = RGBColor(0, 0, 0)  # Preto puro forçado
+                    run.font.size = Pt(max(9, min(24, int(tamanho_max))))
+                    
+                    # Força a cor PRETA para todos os textos/títulos
+                    run.font.color.rgb = RGBColor(0, 0, 0)
                     run.bold = e_bold
                     run.italic = e_italic
 
-                # Atualiza estado para a próxima linha
-                prev_line_str = line_str
-                prev_font_size = tamanho_max
-                prev_bold = e_bold
-                prev_line_width = line_width
+                ultimo_y1 = y1
+                ultimo_tamanho_fonte = tamanho_max
 
         if page_idx < len(pdf_doc) - 1:
             doc_word.add_page_break()
