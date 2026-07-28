@@ -4,9 +4,8 @@ import re
 import tempfile
 import fitz  # PyMuPDF
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-import docx.oxml as oxml
-import docx.opc.constants as opc
+from docx.shared import Pt
+from pdf2docx import Converter
 from PIL import Image
 from pypdf import PdfWriter
 import pytesseract
@@ -24,11 +23,14 @@ logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
 st.markdown(
     f"""
     <style>
+        /* Centralização da logo */
         .centered-logo {{
             display: flex;
             justify-content: center;
             margin-bottom: 15px;
         }}
+        
+        /* Centralização e impedimento de quebra de linha no stRadio */
         div[data-testid="stRadio"] {{
             display: flex !important;
             flex-direction: column !important;
@@ -37,6 +39,7 @@ st.markdown(
             text-align: center !important;
             width: 100% !important;
         }}
+        
         div[data-testid="stRadio"] > label,
         div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {{
             text-align: center !important;
@@ -45,6 +48,7 @@ st.markdown(
             justify-content: center !important;
             white-space: nowrap !important;
         }}
+        
         div[data-testid="stRadio"] [role="radiogroup"] {{
             display: inline-flex !important;
             flex-direction: column !important;
@@ -52,6 +56,8 @@ st.markdown(
             margin: 0 auto !important;
             width: max-content !important;
         }}
+
+        /* Força os textos das opções a não quebrarem linha */
         div[data-testid="stRadio"] label p,
         div[data-testid="stRadio"] label span,
         div[data-testid="stRadio"] label {{
@@ -93,45 +99,11 @@ st.markdown(
 )
 
 
-# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
-def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
-    part = paragraph.part
-    r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
-    
-    hyperlink = oxml.parse_xml(
-        f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-        f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-        f'r:id="{r_id}"/>'
-    )
-    new_run = oxml.parse_xml(
-        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    rPr = oxml.parse_xml(
-        '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    
-    if color:
-        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
-        rPr.append(c)
-    if underline:
-        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
-        rPr.append(u)
-        
-    new_run.append(rPr)
-    
-    # Cria nó de texto de forma segura para evitar erros de parser
-    text_node = oxml.OxmlElement('w:t')
-    text_node.text = text
-    new_run.append(text_node)
-    
-    hyperlink.append(new_run)
-    paragraph._p.append(hyperlink)
-
-
 # ==========================================
 # MÓDULO 1: Cópia Fiel (Para Impressão)
 # ==========================================
 def modo_copia_fiel(pdf_file):
+    """Gera PDF intermediário com OCR e aplica pdf2docx para manter 100% da fidelidade visual."""
     pdf_bytes = pdf_file.read()
     doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
     merger = PdfWriter()
@@ -155,7 +127,6 @@ def modo_copia_fiel(pdf_file):
     temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
 
     try:
-        from pdf2docx import Converter
         cv = Converter(temp_ocr_pdf_path)
         cv.convert(temp_docx_path, start=0, end=None)
         cv.close()
@@ -173,22 +144,32 @@ def modo_copia_fiel(pdf_file):
 # MÓDULO 2: Texto Editável (Limpeza de Artefatos)
 # ==========================================
 def limpar_linha(texto_linha):
+    """Filtra lixo de navegação e remove caracteres/números parasitas que aparecem antes das frases devido a ícones."""
     if not texto_linha:
         return None
 
     l_lower = texto_linha.lower().strip()
+
     blacklist = ["firefox", "about:blank", "lofl", "1 of 1"]
     if any(termo in l_lower for termo in blacklist):
         return None
 
-    texto_limpo = re.sub(r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha)
-    texto_limpo = re.sub(r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
+    # Remove marcadores e caracteres estranhos
+    texto_limpo = re.sub(
+        r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
+    )
+    texto_limpo = re.sub(
+        r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])",
+        "",
+        texto_limpo,
+    )
     texto_limpo = re.sub(r"^\s*[^a-zA-Z0-9À-ÿ]+\s*(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
 
     return texto_limpo.strip() if texto_limpo.strip() else None
 
 
 def modo_texto_editavel(pdf_file):
+    """Extrai texto e coordenadas via OCR, limpa artefatos e constrói parágrafos nativos no Word."""
     doc_word = Document()
     pdf_bytes = pdf_file.read()
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -213,11 +194,16 @@ def modo_texto_editavel(pdf_file):
                 block_num = data["block_num"][i]
                 line_num = data["line_num"][i]
                 chave_linha = (block_num, line_num)
+
                 top = data["top"][i]
                 height = data["height"][i]
 
                 if chave_linha not in linhas:
-                    linhas[chave_linha] = {"palavras": [], "top": top, "heights": []}
+                    linhas[chave_linha] = {
+                        "palavras": [],
+                        "top": top,
+                        "heights": [],
+                    }
 
                 linhas[chave_linha]["palavras"].append(texto)
                 linhas[chave_linha]["heights"].append(height)
@@ -239,7 +225,11 @@ def modo_texto_editavel(pdf_file):
             run.font.name = "Arial"
             run.font.size = Pt(tamanho_fonte_pt)
 
-            if tamanho_fonte_pt >= 14 or texto_linha.isdigit() or "Protocolo" in texto_linha:
+            if (
+                tamanho_fonte_pt >= 14
+                or texto_linha.isdigit()
+                or "Protocolo" in texto_linha
+            ):
                 run.bold = True
 
             p.paragraph_format.space_after = Pt(4)
@@ -254,143 +244,10 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Títulos Pretos, Links e Linhas)
-# ==========================================
-def modo_fiel_editavel(pdf_file):
-    pdf_bytes = pdf_file.read()
-    doc_word = Document()
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    for page_idx in range(len(pdf_doc)):
-        page = pdf_doc[page_idx]
-        
-        # 1. Extração de Links
-        links_pagina = page.get_links()
-        
-        # 2. Extração de Linhas/Vetores Divisórios
-        desenhos = page.get_drawings()
-        linhas_y = []
-        for d in desenhos:
-            for item in d.get("items", []):
-                if item[0] in ("l", "r"):
-                    rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    if rect.width > 100 and rect.height < 5:
-                        linhas_y.append(rect.y0)
-        linhas_y.sort()
-
-        # 3. Extração do Texto por Blocos
-        blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
-
-        for b in blocks:
-            if b.get("type") != 0:
-                continue
-
-            lines = b["lines"]
-            p_atual = None
-            ultimo_y1 = None
-            ultimo_tamanho_fonte = None
-
-            for l in lines:
-                texto_linha = ""
-                e_bold = False
-                e_italic = False
-                tamanho_max = 0.0
-                bbox_linha = l["bbox"]
-
-                for span in l["spans"]:
-                    t = span["text"]
-                    texto_linha += t
-                    fonte_nome = span["font"].lower()
-                    
-                    if any(k in fonte_nome for k in ["bold", "black", "heavy"]):
-                        e_bold = True
-                    if any(k in fonte_nome for k in ["italic", "oblique"]):
-                        e_italic = True
-                    if span["size"] > tamanho_max:
-                        tamanho_max = span["size"]
-
-                line_str = texto_linha.strip()
-                if not line_str:
-                    continue
-
-                line_str = re.sub(r"^(\d+\.)([A-Za-zÀ-ÿ])", r"\1 \2", line_str)
-
-                y0, y1 = bbox_linha[1], bbox_linha[3]
-
-                # Renderiza linha divisória se houver vetor próximo
-                if linhas_y and any(abs(y0 - ly) < 8 for ly in linhas_y):
-                    p_linha = doc_word.add_paragraph()
-                    p_linha.paragraph_format.space_before = Pt(6)
-                    p_linha.paragraph_format.space_after = Pt(6)
-                    p_linha_run = p_linha.add_run("―" * 45)
-                    p_linha_run.font.color.rgb = RGBColor(180, 180, 180)
-
-                # Classificação Semântica
-                e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
-                e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
-                e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
-
-                # Verifica existência de link associado à linha
-                uri_link = None
-                rect_linha = fitz.Rect(bbox_linha)
-                for link in links_pagina:
-                    if link.get("page") == page_idx or "uri" in link:
-                        if rect_linha.intersects(link["from"]):
-                            uri_link = link.get("uri")
-                            break
-
-                # Estruturação de Parágrafos
-                criar_novo_p = True
-                if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
-                    distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
-                    if distancia_vertical < (tamanho_max * 1.4) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
-                        criar_novo_p = False
-
-                if criar_novo_p:
-                    if e_titulo_principal:
-                        p_atual = doc_word.add_paragraph(style='Heading 1')
-                        p_atual.paragraph_format.space_before = Pt(12)
-                        p_atual.paragraph_format.space_after = Pt(4)
-                    elif e_subtitulo:
-                        p_atual = doc_word.add_paragraph(style='Heading 2')
-                        p_atual.paragraph_format.space_before = Pt(8)
-                        p_atual.paragraph_format.space_after = Pt(3)
-                    else:
-                        p_atual = doc_word.add_paragraph()
-                        fmt = p_atual.paragraph_format
-                        fmt.space_before = Pt(2)
-                        fmt.space_after = Pt(2)
-                        if e_bullet:
-                            fmt.left_indent = Inches(0.25)
-
-                if uri_link:
-                    adicionar_link_clicavel(p_atual, uri_link, line_str)
-                else:
-                    run = p_atual.add_run(line_str if criar_novo_p else " " + line_str)
-                    run.font.name = "Arial"
-                    run.font.size = Pt(max(9, min(24, int(tamanho_max))))
-                    
-                    # Força a cor PRETA para todos os textos/títulos
-                    run.font.color.rgb = RGBColor(0, 0, 0)
-                    run.bold = e_bold
-                    run.italic = e_italic
-
-                ultimo_y1 = y1
-                ultimo_tamanho_fonte = tamanho_max
-
-        if page_idx < len(pdf_doc) - 1:
-            doc_word.add_page_break()
-
-    docx_buffer = io.BytesIO()
-    doc_word.save(docx_buffer)
-    docx_buffer.seek(0)
-    return docx_buffer.read()
-
-
-# ==========================================
 # Interface do Usuário (Streamlit UI)
 # ==========================================
 def main():
+    # Título e Subtítulo Centralizados
     st.markdown(
         "<h2 style='text-align: center; font-size: 1.6rem; margin-top: 0;'>Conversor PDF p/ Docx</h2>",
         unsafe_allow_html=True,
@@ -402,41 +259,43 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Bloco Centralizado (50% de largura da tela)
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
+        # Modo de Conversão
         modo = st.radio(
             "Escolha o modo de conversão:",
             options=[
                 "Cópia Fiel (Para Impressão: layout idêntico)",
                 "Texto Editável (Texto limpo sem imagens)",
-                "Fiel e Editável (Layout original e Textos Nativos)"
             ],
-            index=2,
+            index=0,
         )
 
+        # Upload de Arquivo
         pdf_file = st.file_uploader(
             " ",
             type="pdf",
             label_visibility="collapsed",
         )
 
+        # Processamento, Alerta e Botão de Download dentro da coluna de 50%
         if pdf_file:
-            with st.spinner("Analisando estrutura e convertendo documento..."):
+            with st.spinner("Convertendo arquivo..."):
                 try:
                     pdf_file.seek(0)
 
-                    if "Cópia Fiel (Para Impressão" in modo:
+                    if "Cópia Fiel" in modo:
                         docx_bytes = modo_copia_fiel(pdf_file)
                         nome_sufixo = "copia_fiel"
-                    elif "Texto Editável" in modo:
+                    else:
                         docx_bytes = modo_texto_editavel(pdf_file)
                         nome_sufixo = "editavel"
-                    else:
-                        docx_bytes = modo_fiel_editavel(pdf_file)
-                        nome_sufixo = "fiel_editavel_nativo"
 
-                    st.success("Arquivo convertido com sucesso!")
+                    st.success(
+                        "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
+                    )
 
                     st.download_button(
                         label="Baixar Docx",
@@ -454,13 +313,29 @@ if __name__ == "__main__":
 
     st.markdown("""
 <style>
-    .main {background-color: #ffffff; color: #333333;}
-    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    .main {
+        background-color: #ffffff;
+        color: #333333;
+    }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
     header {display: none !important;}
     footer {display: none !important;}
     #MainMenu {display: none !important;}
-    div[data-testid="stAppViewBlockContainer"] {padding-top: 0 !important; padding-bottom: 0 !important;}
-    div[data-testid="stVerticalBlock"] {gap: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;}
-    .element-container {margin-top: 0 !important; margin-bottom: 0 !important;}
+    div[data-testid="stAppViewBlockContainer"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    .element-container {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
