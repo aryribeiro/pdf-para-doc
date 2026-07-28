@@ -94,7 +94,7 @@ st.markdown(
 
 
 def limpa_nome_fonte(font_name):
-    """Remove prefixos de subconjuntos de fontes PDF (ex: ABCDEF+Arial -> Arial)"""
+    """Normaliza o nome da fonte removendo prefixos de subconjuntos de PDF (ex: ABCDEF+Arial -> Arial)"""
     if not font_name:
         return "Arial"
     limpo = re.sub(r'^[A-Z]{6}\+', '', font_name)
@@ -103,7 +103,7 @@ def limpa_nome_fonte(font_name):
 
 
 def adicionar_borda_inferior_xml(paragraph, color_hex="000000", sz="12"):
-    """Injeta a linha horizontal preta vetorial como borda de parágrafo OpenXML"""
+    """Injeta a linha preta horizontal vetorial como uma borda inferior nativa do Word (OpenXML)"""
     pPr = paragraph._p.get_or_add_pPr()
     pBdr = oxml.parse_xml(
         f'<w:pBdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -114,7 +114,7 @@ def adicionar_borda_inferior_xml(paragraph, color_hex="000000", sz="12"):
 
 
 def adicionar_link_clicavel(paragraph, url, text, font_name, font_size, e_bold, e_italic, rgb_color):
-    """Cria um hiperlink OpenXML preservando 1:1 a fonte, tamanho e cor do texto original do PDF"""
+    """Cria um hiperlink OpenXML preservando rigorosamente a fonte, tamanho e estilo do texto original do PDF"""
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
     
@@ -130,7 +130,7 @@ def adicionar_link_clicavel(paragraph, url, text, font_name, font_size, e_bold, 
         '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
     )
     
-    # 1. Mantém a exata família de fonte do texto
+    # 1. Preserva a família exata da fonte
     nome_fonte = limpa_nome_fonte(font_name)
     f_elem = oxml.parse_xml(
         f'<w:rFonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
@@ -138,16 +138,16 @@ def adicionar_link_clicavel(paragraph, url, text, font_name, font_size, e_bold, 
     )
     rPr.append(f_elem)
 
-    # 2. Mantém a cor exata do texto
+    # 2. Preserva a cor exata do texto
     hex_color = f"{rgb_color[0]:02X}{rgb_color[1]:02X}{rgb_color[2]:02X}"
     c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{hex_color}"/>')
     rPr.append(c)
     
-    # 3. Adiciona o sublinhado característico
+    # 3. Adiciona o sublinhado de link
     u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
     rPr.append(u)
     
-    # 4. Mantém o tamanho exato da fonte
+    # 4. Preserva o tamanho exato em meio-pontos (half-points)
     sz_val = str(int(font_size * 2))
     sz_elem = oxml.parse_xml(f'<w:sz xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{sz_val}"/>')
     rPr.append(sz_elem)
@@ -293,20 +293,19 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Motor de Fidelidade Estrita 1:1)
+# MÓDULO 3: Fiel e Editável (Precisão Estrita 1:1)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     """
-    Motor 1:1 de Precisão Estrita:
-    - Mantém a totalidade de quebras de linha nativas do PDF sem fusão.
-    - Preserva linhas divisórias pretas vetoriais exatamente no ponto Y em que aparecem.
-    - Preserva tamanho de fontes e cores exatas do PDF.
-    - Mantém a fonte e formatação idênticas em hiperlinks.
+    Motor 1:1 com Preservação de Formatação Absoluta:
+    - Mapeia diretamente cada linha do PDF para uma linha no Word (sem unir nem dividir).
+    - Captura e desenha linhas pretas horizontais divisórias como bordas OpenXML.
+    - Mantém tamanhos de fonte, cores RGB e fontes de hiperlinks 100% fiéis ao PDF.
     """
     pdf_bytes = pdf_file.read()
     doc_word = Document()
 
-    # Ajusta as margens padrão do documento
+    # Ajusta as margens padrão da página
     for section in doc_word.sections:
         section.top_margin = Inches(0.5)
         section.bottom_margin = Inches(0.5)
@@ -321,7 +320,7 @@ def modo_fiel_editavel(pdf_file):
 
         elementos = []
 
-        # 1. Captura de Vetores de Linhas Horizontais Divisórias
+        # 1. Extração de Linhas Horizontais Pretas Divisórias (Vetores)
         desenhos = page.get_drawings()
         for d in desenhos:
             for item in d.get("items", []):
@@ -338,7 +337,7 @@ def modo_fiel_editavel(pdf_file):
                             "color_hex": hex_color if hex_color != "FFFFFF" else "000000"
                         })
 
-        # 2. Captura de Linhas de Texto (1 Linha do PDF = 1 Parágrafo no Word)
+        # 2. Extração de Linhas de Texto (1 Linha do PDF = 1 Parágrafo no Word)
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
         for b in blocks:
             if b.get("type") != 0:
@@ -352,7 +351,7 @@ def modo_fiel_editavel(pdf_file):
                     "spans": line["spans"]
                 })
 
-        # Ordena todos os elementos estritamente da parte superior para a inferior
+        # Ordena todos os elementos espacialmente da parte superior para a inferior
         elementos.sort(key=lambda item: item["y0"])
 
         ultimo_y1 = None
@@ -404,7 +403,7 @@ def modo_fiel_editavel(pdf_file):
                 g = (color_int >> 8) & 0xFF
                 b_color = color_int & 0xFF
 
-                # Verifica hiperlink para a área do span/linha
+                # Identifica se a região do span intersecta com um hiperlink
                 bbox_span = fitz.Rect(span["bbox"])
                 uri_link = None
                 for link in links_pagina:
