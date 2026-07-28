@@ -93,8 +93,8 @@ st.markdown(
 )
 
 
-# Helper REESCRITO para aceitar parâmetros fiéis de fonte, tamanho e cor (Sem forçar Azul)
-def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_pt=11, hex_color="000000", is_bold=False, is_italic=False):
+# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
+def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
     
@@ -110,27 +110,17 @@ def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_p
         '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
     )
     
-    if font_name:
-        rFont = oxml.parse_xml(f'<w:rFonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:ascii="{font_name}" w:hAnsi="{font_name}" w:cs="{font_name}"/>')
-        rPr.append(rFont)
-    if font_size_pt:
-        sz = int(font_size_pt * 2) # Word usa meio-pontos
-        rSz = oxml.parse_xml(f'<w:sz xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{sz}"/>')
-        rPr.append(rSz)
-    if hex_color:
-        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{hex_color}"/>')
+    if color:
+        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
         rPr.append(c)
-    if is_bold:
-        b = oxml.parse_xml('<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
-        rPr.append(b)
-    if is_italic:
-        i = oxml.parse_xml('<w:i xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
-        rPr.append(i)
+    if underline:
+        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
+        rPr.append(u)
         
     new_run.append(rPr)
     
+    # Cria nó de texto de forma segura para evitar erros de parser
     text_node = oxml.OxmlElement('w:t')
-    text_node.set(oxml.ns.qn('xml:space'), 'preserve') # Preserva espaços com perfeição
     text_node.text = text
     new_run.append(text_node)
     
@@ -139,7 +129,7 @@ def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_p
 
 
 # ==========================================
-# MÓDULO 1: Cópia Fiel (Para Impressão) -> MANTIDO INTACTO
+# MÓDULO 1: Cópia Fiel (Para Impressão) - INTACTO
 # ==========================================
 def modo_copia_fiel(pdf_file):
     pdf_bytes = pdf_file.read()
@@ -180,7 +170,7 @@ def modo_copia_fiel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 2: Texto Editável (Limpeza de Artefatos) -> MANTIDO INTACTO
+# MÓDULO 2: Texto Editável (Limpeza de Artefatos) - INTACTO
 # ==========================================
 def limpar_linha(texto_linha):
     if not texto_linha:
@@ -264,187 +254,30 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável 100% NATIVO -> REESCRITO COM ALTA PRECISÃO
+# MÓDULO 3: Fiel e Editável (Conversão Direta de Layout Nativo)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
-    pdf_bytes = pdf_file.read()
-    doc_word = Document()
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
-    # Define Margem de segurança. Os cálculos posicionais compensarão a margem.
-    MARGIN_PT = 36.0 
-    for section in doc_word.sections:
-        section.top_margin = Pt(MARGIN_PT)
-        section.bottom_margin = Pt(MARGIN_PT)
-        section.left_margin = Pt(MARGIN_PT)
-        section.right_margin = Pt(MARGIN_PT)
+    # Salva o arquivo enviado em um arquivo temporário em disco
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+        temp_pdf.write(pdf_file.read())
+        temp_pdf_path = temp_pdf.name
 
-    for page_idx in range(len(pdf_doc)):
-        page = pdf_doc[page_idx]
-        page_width = page.rect.width
-        links_pagina = page.get_links()
-        
-        # 1. Extração Cirúrgica de Linhas Vetoriais (Pretas, Coloridas, etc)
-        linhas_vetoriais = []
-        for d in page.get_drawings():
-            for item in d.get("items", []):
-                if item[0] in ("l", "r"):
-                    rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    # Verifica se é uma linha horizontal
-                    if rect.width > 20 and rect.height < 10:
-                        color = d.get("color") or d.get("fill")
-                        rgb_hex = "000000"
-                        if color and len(color) == 3:
-                            r, g, b = [int(c * 255) for c in color]
-                            rgb_hex = f"{r:02x}{g:02x}{b:02x}"
-                        
-                        linhas_vetoriais.append({
-                            "y0": rect.y0, 
-                            "x0": rect.x0, 
-                            "x1": rect.x1, 
-                            "color": rgb_hex
-                        })
-        
-        linhas_vetoriais.sort(key=lambda x: x["y0"])
+    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
 
-        # 2. Extração de Texto com Coordenadas Preservadas
-        blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
-        blocks = [b for b in blocks if b.get("type") == 0]
-        blocks.sort(key=lambda x: x["bbox"][1])
+    try:
+        from pdf2docx import Converter
+        # Executa a conversão vetorial direta sem OCR intermediário
+        cv = Converter(temp_pdf_path)
+        cv.convert(temp_docx_path, start=0, end=None)
+        cv.close()
 
-        ultimo_y1 = MARGIN_PT
-        linha_idx = 0
-
-        for b in blocks:
-            # 3. Inserir Linhas Vetoriais que aparecem antes do Bloco de Texto
-            while linha_idx < len(linhas_vetoriais) and linhas_vetoriais[linha_idx]["y0"] < b["bbox"][1]:
-                l_data = linhas_vetoriais[linha_idx]
-                espaco_linha = max(0, l_data["y0"] - ultimo_y1)
-
-                p_linha = doc_word.add_paragraph()
-                p_linha.paragraph_format.space_before = Pt(espaco_linha)
-                p_linha.paragraph_format.space_after = Pt(2)
-
-                # Injecao XML para borda de parágrafo simulando vetor no exato layout
-                pPr = p_linha._p.get_or_add_pPr()
-                pbdr = oxml.parse_xml(
-                    f'<w:pBdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n'
-                    f'  <w:bottom w:val="single" w:sz="6" w:space="1" w:color="{l_data["color"]}"/>\n'
-                    f'</w:pBdr>'
-                )
-                pPr.append(pbdr)
-                
-                # Respeita o comprimento da linha calculando via Twips (20 por ponto)
-                ind_left = int(max(0, l_data["x0"] - MARGIN_PT) * 20)
-                ind_right = int(max(0, page_width - l_data["x1"] - MARGIN_PT) * 20)
-                ind = oxml.parse_xml(
-                    f'<w:ind xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-                    f'w:left="{ind_left}" w:right="{ind_right}"/>'
-                )
-                pPr.append(ind)
-                
-                ultimo_y1 = l_data["y0"] + 2
-                linha_idx += 1
-
-            # 4. Inserir Bloco de Texto Perfeitamente Alinhado
-            espaco_antes = max(0, b["bbox"][1] - ultimo_y1)
-            p = doc_word.add_paragraph()
-            p.paragraph_format.space_before = Pt(espaco_antes)
-            p.paragraph_format.space_after = Pt(0) # Mantem linhas unidas como no PDF
-            
-            # Recuo Esquerdo Baseado no Eixo X Nativo do PDF
-            indent_left = max(0, b["bbox"][0] - MARGIN_PT)
-            p.paragraph_format.left_indent = Pt(indent_left)
-
-            for l_idx, l in enumerate(b["lines"]):
-                # Quebra de Linha: Nunca junta textos onde havia quebra no PDF
-                if l_idx > 0:
-                    run = p.add_run()
-                    run.add_break()
-
-                for span in l["spans"]:
-                    texto = span["text"]
-                    if not texto.strip() and texto != " ":
-                        continue
-
-                    # Extração de Atributos Nativos do Texto
-                    font_size = span["size"]
-                    font_name_clean = span["font"].split('+')[-1].split('-')[0]
-                    if not font_name_clean: 
-                        font_name_clean = "Arial"
-
-                    e_bold = any(k in span["font"].lower() for k in ["bold", "black", "heavy"])
-                    e_italic = any(k in span["font"].lower() for k in ["italic", "oblique"])
-
-                    # Extração de Cor Hexadecimal Perfeita
-                    c_val = span["color"]
-                    r = (c_val >> 16) & 255
-                    g = (c_val >> 8) & 255
-                    b_col = c_val & 255
-                    hex_color = f"{r:02x}{g:02x}{b_col:02x}"
-
-                    # Validação de Hyperlinks no Span atual
-                    uri_link = None
-                    span_rect = fitz.Rect(span["bbox"])
-                    for link in links_pagina:
-                        if link.get("page") == page_idx or "uri" in link:
-                            if span_rect.intersects(link["from"]) and "uri" in link:
-                                uri_link = link["uri"]
-                                break
-
-                    # Inserção do Texto (Sendo Link ou Normal) preservando estilos Nativos
-                    if uri_link:
-                        adicionar_link_clicavel(
-                            p, uri_link, texto,
-                            font_name=font_name_clean,
-                            font_size_pt=font_size,
-                            hex_color=hex_color,
-                            is_bold=e_bold,
-                            is_italic=e_italic
-                        )
-                    else:
-                        run = p.add_run(texto)
-                        run.font.name = font_name_clean
-                        run.font.size = Pt(font_size)
-                        run.font.color.rgb = RGBColor(r, g, b_col)
-                        run.bold = e_bold
-                        run.italic = e_italic
-
-            ultimo_y1 = b["bbox"][3]
-
-        # 5. Inserir Restante de Linhas Vetoriais (Fim da Página)
-        while linha_idx < len(linhas_vetoriais):
-            l_data = linhas_vetoriais[linha_idx]
-            espaco_linha = max(0, l_data["y0"] - ultimo_y1)
-
-            p_linha = doc_word.add_paragraph()
-            p_linha.paragraph_format.space_before = Pt(espaco_linha)
-            p_linha.paragraph_format.space_after = Pt(2)
-
-            pPr = p_linha._p.get_or_add_pPr()
-            pbdr = oxml.parse_xml(
-                f'<w:pBdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n'
-                f'  <w:bottom w:val="single" w:sz="6" w:space="1" w:color="{l_data["color"]}"/>\n'
-                f'</w:pBdr>'
-            )
-            pPr.append(pbdr)
-            
-            ind_left = int(max(0, l_data["x0"] - MARGIN_PT) * 20)
-            ind_right = int(max(0, page_width - l_data["x1"] - MARGIN_PT) * 20)
-            ind = oxml.parse_xml(
-                f'<w:ind xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-                f'w:left="{ind_left}" w:right="{ind_right}"/>'
-            )
-            pPr.append(ind)
-            linha_idx += 1
-
-        if page_idx < len(pdf_doc) - 1:
-            doc_word.add_page_break()
-
-    docx_buffer = io.BytesIO()
-    doc_word.save(docx_buffer)
-    docx_buffer.seek(0)
-    return docx_buffer.read()
+        with open(temp_docx_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        if os.path.exists(temp_docx_path):
+            os.remove(temp_docx_path)
 
 
 # ==========================================
