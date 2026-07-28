@@ -165,7 +165,7 @@ def modo_copia_fiel(pdf_file):
         try:
             from pdf2docx import Converter
         except ImportError:
-            raise RuntimeError("A biblioteca 'pdf2docx' precisa estar listada em requirements.txt e instalada no servidor para o Módulo 1.")
+            raise RuntimeError("A biblioteca 'pdf2docx' precisa estar instalada no ambiente para o Módulo 1.")
 
         cv = Converter(temp_ocr_pdf_path)
         cv.convert(temp_docx_path, start=0, end=None)
@@ -265,14 +265,14 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável NATIVO (PyMuPDF + python-docx)
+# MÓDULO 3: Fiel e Editável - PRESERVAÇÃO RIGOROSA DE LINHAS E ESTILOS
 # ==========================================
 def modo_fiel_editavel(pdf_file):
     pdf_bytes = pdf_file.read()
     doc_word = Document()
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # Ajuste de margens
+    # Configura margens padrão da página
     for section in doc_word.sections:
         section.top_margin = Pt(36)
         section.bottom_margin = Pt(36)
@@ -283,7 +283,7 @@ def modo_fiel_editavel(pdf_file):
         page = pdf_doc[page_idx]
         links_pagina = page.get_links()
 
-        # 1. Extração de Linhas/Vetores Divisórios (Desenhos)
+        # 1. Rastreamento de Linhas Divisórias Vetoriais
         linhas_vetoriais = []
         for d in page.get_drawings():
             for item in d.get("items", []):
@@ -299,141 +299,112 @@ def modo_fiel_editavel(pdf_file):
                         linhas_vetoriais.append({
                             "type": "line",
                             "y0": rect.y0,
-                            "x0": rect.x0,
-                            "x1": rect.x1,
                             "color": rgb_hex
                         })
 
-        # 2. Extração de Texto estruturado
+        # 2. Extração Física de Linhas de Texto (Sem fusão/junção de linhas)
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
-        blocks_texto = [b for b in blocks if b.get("type") == 0]
-
         elementos = []
+
         for lv in linhas_vetoriais:
             elementos.append(lv)
-        for b in blocks_texto:
-            elementos.append({
-                "type": "block",
-                "y0": b["bbox"][1],
-                "block": b
-            })
 
+        for b in blocks:
+            if b.get("type") == 0:  # Bloco de texto
+                for line in b["lines"]:
+                    spans = line["spans"]
+                    if not spans:
+                        continue
+                    
+                    line_text = "".join([s["text"] for s in spans])
+                    if not line_text.strip():
+                        continue
+
+                    elementos.append({
+                        "type": "text_line",
+                        "y0": line["bbox"][1],
+                        "line": line
+                    })
+
+        # Ordena rigorosamente de cima para baixo pela coordenada Y
         elementos.sort(key=lambda x: x["y0"])
 
-        p_atual = None
-        ultimo_y1 = None
-        ultimo_tamanho = None
+        ultimo_y0 = None
 
         for el in elementos:
             if el["type"] == "line":
                 p_linha = doc_word.add_paragraph()
-                p_linha.paragraph_format.space_before = Pt(4)
-                p_linha.paragraph_format.space_after = Pt(4)
+                p_linha.paragraph_format.space_before = Pt(2)
+                p_linha.paragraph_format.space_after = Pt(2)
                 adicionar_linha_horizontal(p_linha, el["color"])
-                p_atual = None
-                ultimo_y1 = el["y0"] + 4
+                ultimo_y0 = el["y0"]
                 continue
 
-            b = el["block"]
-            lines = b["lines"]
+            # Renderização de Linha de Texto Exata (1 Linha do PDF = 1 Parágrafo Word)
+            line = el["line"]
+            spans = line["spans"]
 
-            for line in lines:
-                spans = line["spans"]
-                if not spans:
+            p = doc_word.add_paragraph()
+            p_fmt = p.paragraph_format
+
+            y0 = el["y0"]
+            if ultimo_y0 is not None:
+                gap = y0 - ultimo_y0
+                space_pt = max(0, min(14, gap - 8))
+                p_fmt.space_before = Pt(space_pt)
+            else:
+                p_fmt.space_before = Pt(0)
+
+            p_fmt.space_after = Pt(1) # Mantém espaçamento entre linhas idêntico ao original
+
+            for s in spans:
+                texto = s["text"]
+                if not texto:
                     continue
 
-                texto_linha = "".join([s["text"] for s in spans]).strip()
-                if not texto_linha:
-                    continue
+                fonte_raw = s["font"]
+                fonte_clean = fonte_raw.split('+')[-1].split('-')[0]
+                if not fonte_clean or fonte_clean.lower() in ["default", "none"]:
+                    fonte_clean = "Arial"
 
-                bbox_linha = line["bbox"]
-                y0_linha, y1_linha = bbox_linha[1], bbox_linha[3]
+                fonte_size = s["size"]
+                e_bold = any(k in fonte_raw.lower() for k in ["bold", "black", "heavy"])
+                e_italic = any(k in fonte_raw.lower() for k in ["italic", "oblique"])
 
-                tamanho_max = max(s["size"] for s in spans)
+                c_val = s["color"]
+                r = (c_val >> 16) & 255
+                g = (c_val >> 8) & 255
+                b_col = c_val & 255
+                hex_color = f"{r:02x}{g:02x}{b_col:02x}"
 
-                e_bullet = texto_linha.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", texto_linha))
-                e_titulo = tamanho_max >= 14.0 or any("bold" in s["font"].lower() or "black" in s["font"].lower() for s in spans if s["size"] >= 12.0)
-                fim_com_dois_pontos = texto_linha.endswith(":")
+                # Mapeamento de Links mantendo estilo exato do span
+                uri_link = None
+                span_rect = fitz.Rect(s["bbox"])
+                for link in links_pagina:
+                    if link.get("page") == page_idx or "uri" in link:
+                        if span_rect.intersects(link["from"]) and "uri" in link:
+                            uri_link = link["uri"]
+                            break
 
-                distancia_v = (y0_linha - ultimo_y1) if ultimo_y1 is not None else 10.0
+                if uri_link:
+                    adicionar_link_clicavel(
+                        p, uri_link, texto,
+                        font_name=fonte_clean,
+                        font_size_pt=fonte_size,
+                        hex_color=hex_color,
+                        is_bold=e_bold,
+                        is_italic=e_italic,
+                        underline=True
+                    )
+                else:
+                    run = p.add_run(texto)
+                    run.font.name = fonte_clean
+                    run.font.size = Pt(fonte_size)
+                    run.font.color.rgb = RGBColor(r, g, b_col)
+                    run.bold = e_bold
+                    run.italic = e_italic
 
-                # Decisão Inteligente de Quebra de Parágrafo
-                criar_novo_p = True
-                if (p_atual is not None and
-                    not e_bullet and
-                    not e_titulo and
-                    ultimo_tamanho is not None and
-                    abs(tamanho_max - ultimo_tamanho) < 1.5 and
-                    distancia_v < (tamanho_max * 1.5) and
-                    not fim_com_dois_pontos):
-                    criar_novo_p = False
-
-                if criar_novo_p:
-                    p_atual = doc_word.add_paragraph()
-                    p_fmt = p_atual.paragraph_format
-                    
-                    if e_bullet:
-                        p_fmt.left_indent = Inches(0.25)
-                        p_fmt.space_before = Pt(3)
-                        p_fmt.space_after = Pt(2)
-                    elif e_titulo:
-                        p_fmt.space_before = Pt(8)
-                        p_fmt.space_after = Pt(4)
-                    else:
-                        p_fmt.space_before = Pt(3)
-                        p_fmt.space_after = Pt(2)
-
-                for s_idx, s in enumerate(spans):
-                    t = s["text"]
-                    if not t:
-                        continue
-
-                    if not criar_novo_p and s_idx == 0:
-                        t = " " + t.lstrip()
-
-                    fonte_raw = s["font"]
-                    fonte_clean = fonte_raw.split('+')[-1].split('-')[0]
-                    if not fonte_clean or fonte_clean.lower() in ["default", "none"]:
-                        fonte_clean = "Arial"
-
-                    fonte_size = s["size"]
-                    e_bold = any(k in fonte_raw.lower() for k in ["bold", "black", "heavy"])
-                    e_italic = any(k in fonte_raw.lower() for k in ["italic", "oblique"])
-
-                    c_val = s["color"]
-                    r = (c_val >> 16) & 255
-                    g = (c_val >> 8) & 255
-                    b_col = c_val & 255
-                    hex_color = f"{r:02x}{g:02x}{b_col:02x}"
-
-                    uri_link = None
-                    span_rect = fitz.Rect(s["bbox"])
-                    for link in links_pagina:
-                        if link.get("page") == page_idx or "uri" in link:
-                            if span_rect.intersects(link["from"]) and "uri" in link:
-                                uri_link = link["uri"]
-                                break
-
-                    if uri_link:
-                        adicionar_link_clicavel(
-                            p_atual, uri_link, t,
-                            font_name=fonte_clean,
-                            font_size_pt=fonte_size,
-                            hex_color=hex_color,
-                            is_bold=e_bold,
-                            is_italic=e_italic,
-                            underline=True
-                        )
-                    else:
-                        run = p_atual.add_run(t)
-                        run.font.name = fonte_clean
-                        run.font.size = Pt(fonte_size)
-                        run.font.color.rgb = RGBColor(r, g, b_col)
-                        run.bold = e_bold
-                        run.italic = e_italic
-
-                ultimo_y1 = y1_linha
-                ultimo_tamanho = tamanho_max
+            ultimo_y0 = line["bbox"][3]
 
         if page_idx < len(pdf_doc) - 1:
             doc_word.add_page_break()
