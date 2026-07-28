@@ -93,43 +93,50 @@ st.markdown(
 )
 
 
-# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
-def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
+# Helper para criar links clicáveis mantendo a fonte, tamanho e cor NATIVAS do PDF
+def adicionar_link_clicavel(paragraph, url, text, font_name="Arial", font_size_pt=11, hex_color="0000FF", is_bold=False, is_italic=False, underline=True):
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    
+    sz_val = int(font_size_pt * 2)
+    b_tag = "<w:b/>" if is_bold else ""
+    i_tag = "<w:i/>" if is_italic else ""
+    u_tag = '<w:u w:val="single"/>' if underline else ""
     
     hyperlink = oxml.parse_xml(
         f'<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-        f'r:id="{r_id}"/>'
+        f'r:id="{r_id}">\n'
+        f'  <w:r>\n'
+        f'    <w:rPr>\n'
+        f'      <w:rFonts w:ascii="{font_name}" w:hAnsi="{font_name}" w:cs="{font_name}"/>\n'
+        f'      <w:sz w:val="{sz_val}"/>\n'
+        f'      <w:szCs w:val="{sz_val}"/>\n'
+        f'      <w:color w:val="{hex_color}"/>\n'
+        f'      {b_tag}\n'
+        f'      {i_tag}\n'
+        f'      {u_tag}\n'
+        f'    </w:rPr>\n'
+        f'    <w:t xml:space="preserve">{text}</w:t>\n'
+        f'  </w:r>\n'
+        f'</w:hyperlink>'
     )
-    new_run = oxml.parse_xml(
-        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    rPr = oxml.parse_xml(
-        '<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
-    )
-    
-    if color:
-        c = oxml.parse_xml(f'<w:color xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="{color}"/>')
-        rPr.append(c)
-    if underline:
-        u = oxml.parse_xml('<w:u xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="single"/>')
-        rPr.append(u)
-        
-    new_run.append(rPr)
-    
-    # Cria nó de texto de forma segura para evitar erros de parser
-    text_node = oxml.OxmlElement('w:t')
-    text_node.text = text
-    new_run.append(text_node)
-    
-    hyperlink.append(new_run)
     paragraph._p.append(hyperlink)
 
 
+# Helper para injetar linha divisória vetorial nativa no Word
+def adicionar_linha_horizontal(paragraph, color_hex="000000"):
+    pPr = paragraph._p.get_or_add_pPr()
+    pbdr = oxml.parse_xml(
+        f'<w:pBdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n'
+        f'  <w:bottom w:val="single" w:sz="12" w:space="1" w:color="{color_hex}"/>\n'
+        f'</w:pBdr>'
+    )
+    pPr.append(pbdr)
+
+
 # ==========================================
-# MÓDULO 1: Cópia Fiel (Para Impressão) - INTACTO
+# MÓDULO 1: Cópia Fiel (Para Impressão) - MANTIDO INTACTO
 # ==========================================
 def modo_copia_fiel(pdf_file):
     pdf_bytes = pdf_file.read()
@@ -155,7 +162,11 @@ def modo_copia_fiel(pdf_file):
     temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
 
     try:
-        from pdf2docx import Converter
+        try:
+            from pdf2docx import Converter
+        except ImportError:
+            raise RuntimeError("A biblioteca 'pdf2docx' precisa estar listada em requirements.txt e instalada no servidor para o Módulo 1.")
+
         cv = Converter(temp_ocr_pdf_path)
         cv.convert(temp_docx_path, start=0, end=None)
         cv.close()
@@ -170,7 +181,7 @@ def modo_copia_fiel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 2: Texto Editável (Limpeza de Artefatos) - INTACTO
+# MÓDULO 2: Texto Editável (Limpeza de Artefatos) - MANTIDO INTACTO
 # ==========================================
 def limpar_linha(texto_linha):
     if not texto_linha:
@@ -254,30 +265,183 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Conversão Direta de Layout Nativo)
+# MÓDULO 3: Fiel e Editável NATIVO (PyMuPDF + python-docx)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
-    # Salva o arquivo enviado em um arquivo temporário em disco
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(pdf_file.read())
-        temp_pdf_path = temp_pdf.name
+    pdf_bytes = pdf_file.read()
+    doc_word = Document()
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    temp_docx_path = temp_pdf_path.replace(".pdf", ".docx")
+    # Ajuste de margens
+    for section in doc_word.sections:
+        section.top_margin = Pt(36)
+        section.bottom_margin = Pt(36)
+        section.left_margin = Pt(36)
+        section.right_margin = Pt(36)
 
-    try:
-        from pdf2docx import Converter
-        # Executa a conversão vetorial direta sem OCR intermediário
-        cv = Converter(temp_pdf_path)
-        cv.convert(temp_docx_path, start=0, end=None)
-        cv.close()
+    for page_idx in range(len(pdf_doc)):
+        page = pdf_doc[page_idx]
+        links_pagina = page.get_links()
 
-        with open(temp_docx_path, "rb") as f:
-            return f.read()
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
+        # 1. Extração de Linhas/Vetores Divisórios (Desenhos)
+        linhas_vetoriais = []
+        for d in page.get_drawings():
+            for item in d.get("items", []):
+                if item[0] in ("l", "r"):
+                    rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
+                    if rect.width > 30 and rect.height < 10:
+                        color = d.get("color") or d.get("fill")
+                        rgb_hex = "000000"
+                        if color and len(color) == 3:
+                            r, g, b = [int(c * 255) for c in color]
+                            rgb_hex = f"{r:02x}{g:02x}{b:02x}"
+
+                        linhas_vetoriais.append({
+                            "type": "line",
+                            "y0": rect.y0,
+                            "x0": rect.x0,
+                            "x1": rect.x1,
+                            "color": rgb_hex
+                        })
+
+        # 2. Extração de Texto estruturado
+        blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
+        blocks_texto = [b for b in blocks if b.get("type") == 0]
+
+        elementos = []
+        for lv in linhas_vetoriais:
+            elementos.append(lv)
+        for b in blocks_texto:
+            elementos.append({
+                "type": "block",
+                "y0": b["bbox"][1],
+                "block": b
+            })
+
+        elementos.sort(key=lambda x: x["y0"])
+
+        p_atual = None
+        ultimo_y1 = None
+        ultimo_tamanho = None
+
+        for el in elementos:
+            if el["type"] == "line":
+                p_linha = doc_word.add_paragraph()
+                p_linha.paragraph_format.space_before = Pt(4)
+                p_linha.paragraph_format.space_after = Pt(4)
+                adicionar_linha_horizontal(p_linha, el["color"])
+                p_atual = None
+                ultimo_y1 = el["y0"] + 4
+                continue
+
+            b = el["block"]
+            lines = b["lines"]
+
+            for line in lines:
+                spans = line["spans"]
+                if not spans:
+                    continue
+
+                texto_linha = "".join([s["text"] for s in spans]).strip()
+                if not texto_linha:
+                    continue
+
+                bbox_linha = line["bbox"]
+                y0_linha, y1_linha = bbox_linha[1], bbox_linha[3]
+
+                tamanho_max = max(s["size"] for s in spans)
+
+                e_bullet = texto_linha.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", texto_linha))
+                e_titulo = tamanho_max >= 14.0 or any("bold" in s["font"].lower() or "black" in s["font"].lower() for s in spans if s["size"] >= 12.0)
+                fim_com_dois_pontos = texto_linha.endswith(":")
+
+                distancia_v = (y0_linha - ultimo_y1) if ultimo_y1 is not None else 10.0
+
+                # Decisão Inteligente de Quebra de Parágrafo
+                criar_novo_p = True
+                if (p_atual is not None and
+                    not e_bullet and
+                    not e_titulo and
+                    ultimo_tamanho is not None and
+                    abs(tamanho_max - ultimo_tamanho) < 1.5 and
+                    distancia_v < (tamanho_max * 1.5) and
+                    not fim_com_dois_pontos):
+                    criar_novo_p = False
+
+                if criar_novo_p:
+                    p_atual = doc_word.add_paragraph()
+                    p_fmt = p_atual.paragraph_format
+                    
+                    if e_bullet:
+                        p_fmt.left_indent = Inches(0.25)
+                        p_fmt.space_before = Pt(3)
+                        p_fmt.space_after = Pt(2)
+                    elif e_titulo:
+                        p_fmt.space_before = Pt(8)
+                        p_fmt.space_after = Pt(4)
+                    else:
+                        p_fmt.space_before = Pt(3)
+                        p_fmt.space_after = Pt(2)
+
+                for s_idx, s in enumerate(spans):
+                    t = s["text"]
+                    if not t:
+                        continue
+
+                    if not criar_novo_p and s_idx == 0:
+                        t = " " + t.lstrip()
+
+                    fonte_raw = s["font"]
+                    fonte_clean = fonte_raw.split('+')[-1].split('-')[0]
+                    if not fonte_clean or fonte_clean.lower() in ["default", "none"]:
+                        fonte_clean = "Arial"
+
+                    fonte_size = s["size"]
+                    e_bold = any(k in fonte_raw.lower() for k in ["bold", "black", "heavy"])
+                    e_italic = any(k in fonte_raw.lower() for k in ["italic", "oblique"])
+
+                    c_val = s["color"]
+                    r = (c_val >> 16) & 255
+                    g = (c_val >> 8) & 255
+                    b_col = c_val & 255
+                    hex_color = f"{r:02x}{g:02x}{b_col:02x}"
+
+                    uri_link = None
+                    span_rect = fitz.Rect(s["bbox"])
+                    for link in links_pagina:
+                        if link.get("page") == page_idx or "uri" in link:
+                            if span_rect.intersects(link["from"]) and "uri" in link:
+                                uri_link = link["uri"]
+                                break
+
+                    if uri_link:
+                        adicionar_link_clicavel(
+                            p_atual, uri_link, t,
+                            font_name=fonte_clean,
+                            font_size_pt=fonte_size,
+                            hex_color=hex_color,
+                            is_bold=e_bold,
+                            is_italic=e_italic,
+                            underline=True
+                        )
+                    else:
+                        run = p_atual.add_run(t)
+                        run.font.name = fonte_clean
+                        run.font.size = Pt(fonte_size)
+                        run.font.color.rgb = RGBColor(r, g, b_col)
+                        run.bold = e_bold
+                        run.italic = e_italic
+
+                ultimo_y1 = y1_linha
+                ultimo_tamanho = tamanho_max
+
+        if page_idx < len(pdf_doc) - 1:
+            doc_word.add_page_break()
+
+    docx_buffer = io.BytesIO()
+    doc_word.save(docx_buffer)
+    docx_buffer.seek(0)
+    return docx_buffer.read()
 
 
 # ==========================================

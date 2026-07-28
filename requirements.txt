@@ -4,3 +4,4 @@ pytesseract
 Pillow
 PyMuPDF
 pypdf
+pdf2docx
