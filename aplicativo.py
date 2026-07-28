@@ -93,7 +93,7 @@ st.markdown(
 )
 
 
-# Helper para criar links clicáveis nativos no Word (Com XML namespaces corrigidos)
+# Helper seguro para adicionar hiperlinks mantendo validação OpenXML
 def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True):
     part = paragraph.part
     r_id = part.relate_to(url, opc.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
@@ -119,7 +119,6 @@ def adicionar_link_clicavel(paragraph, url, text, color="0000FF", underline=True
         
     new_run.append(rPr)
     
-    # Cria nó de texto de forma segura para evitar erros de parser
     text_node = oxml.OxmlElement('w:t')
     text_node.text = text
     new_run.append(text_node)
@@ -254,83 +253,41 @@ def modo_texto_editavel(pdf_file):
 
 
 # ==========================================
-# MÓDULO 3: Fiel e Editável (Títulos Pretos, Links e Linhas)
+# MÓDULO 3: Fiel e Editável (Precisão Estrita de Linhas)
 # ==========================================
 def modo_fiel_editavel(pdf_file):
+    """
+    Mapeamento Estrito Linha a Linha:
+    Mapeia diretamente cada linha física do PDF para o Word sem fusões.
+    Preserva a estrutura exata de quebras de linha, fontes, tamanhos e hiperlinks.
+    """
     pdf_bytes = pdf_file.read()
     doc_word = Document()
+    
+    # Configura margens do documento para coincidir com a página padrão do PDF (~2cm)
+    for section in doc_word.sections:
+        section.top_margin = Inches(0.8)
+        section.bottom_margin = Inches(0.8)
+        section.left_margin = Inches(0.8)
+        section.right_margin = Inches(0.8)
+
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for page_idx in range(len(pdf_doc)):
         page = pdf_doc[page_idx]
-        
-        # 1. Extração de Links
         links_pagina = page.get_links()
-        
-        # 2. Extração de Linhas/Vetores Divisórios
-        desenhos = page.get_drawings()
-        linhas_y = []
-        for d in desenhos:
-            for item in d.get("items", []):
-                if item[0] in ("l", "r"):
-                    rect = item[1] if item[0] == "r" else fitz.Rect(item[1], item[2])
-                    if rect.width > 100 and rect.height < 5:
-                        linhas_y.append(rect.y0)
-        linhas_y.sort()
 
-        # 3. Extração do Texto por Blocos
+        # Extração hierárquica por blocos e linhas do PyMuPDF
         blocks = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)["blocks"]
 
         for b in blocks:
-            if b.get("type") != 0:
+            if b.get("type") != 0:  # Processa apenas blocos de texto
                 continue
 
-            lines = b["lines"]
-            p_atual = None
-            ultimo_y1 = None
-            ultimo_tamanho_fonte = None
-
-            for l in lines:
-                texto_linha = ""
-                e_bold = False
-                e_italic = False
-                tamanho_max = 0.0
-                bbox_linha = l["bbox"]
-
-                for span in l["spans"]:
-                    t = span["text"]
-                    texto_linha += t
-                    fonte_nome = span["font"].lower()
-                    
-                    if any(k in fonte_nome for k in ["bold", "black", "heavy"]):
-                        e_bold = True
-                    if any(k in fonte_nome for k in ["italic", "oblique"]):
-                        e_italic = True
-                    if span["size"] > tamanho_max:
-                        tamanho_max = span["size"]
-
-                line_str = texto_linha.strip()
-                if not line_str:
-                    continue
-
-                line_str = re.sub(r"^(\d+\.)([A-Za-zÀ-ÿ])", r"\1 \2", line_str)
-
-                y0, y1 = bbox_linha[1], bbox_linha[3]
-
-                # Renderiza linha divisória se houver vetor próximo
-                if linhas_y and any(abs(y0 - ly) < 8 for ly in linhas_y):
-                    p_linha = doc_word.add_paragraph()
-                    p_linha.paragraph_format.space_before = Pt(6)
-                    p_linha.paragraph_format.space_after = Pt(6)
-                    p_linha_run = p_linha.add_run("―" * 45)
-                    p_linha_run.font.color.rgb = RGBColor(180, 180, 180)
-
-                # Classificação Semântica
-                e_bullet = line_str.startswith(("•", "-", "–", "*")) or bool(re.match(r"^\d+[\.\)]\s", line_str))
-                e_titulo_principal = tamanho_max >= 15.0 or (e_bold and tamanho_max >= 13.0 and len(line_str) < 40)
-                e_subtitulo = e_bold and (11.5 <= tamanho_max < 13.0) and len(line_str) < 50
-
-                # Verifica existência de link associado à linha
+            for line in b["lines"]:
+                bbox_linha = line["bbox"]
+                
+                # Identifica se a linha inteira intercepta algum hiperlink
                 uri_link = None
                 rect_linha = fitz.Rect(bbox_linha)
                 for link in links_pagina:
@@ -339,44 +296,33 @@ def modo_fiel_editavel(pdf_file):
                             uri_link = link.get("uri")
                             break
 
-                # Estruturação de Parágrafos
-                criar_novo_p = True
-                if p_atual is not None and not e_bullet and not e_titulo_principal and not e_subtitulo:
-                    distancia_vertical = y0 - (ultimo_y1 if ultimo_y1 is not None else y0)
-                    if distancia_vertical < (tamanho_max * 1.4) and abs(tamanho_max - (ultimo_tamanho_fonte or tamanho_max)) < 2.0:
-                        criar_novo_p = False
+                # Cria EXATAMENTE um parágrafo por linha do PDF (Fidelidade estrita)
+                p = doc_word.add_paragraph()
+                fmt = p.paragraph_format
+                fmt.space_before = Pt(0)
+                fmt.space_after = Pt(1.5)  # Pequeno respiro entrelinha similar ao PDF
+                fmt.line_spacing = 1.0
 
-                if criar_novo_p:
-                    if e_titulo_principal:
-                        p_atual = doc_word.add_paragraph(style='Heading 1')
-                        p_atual.paragraph_format.space_before = Pt(12)
-                        p_atual.paragraph_format.space_after = Pt(4)
-                    elif e_subtitulo:
-                        p_atual = doc_word.add_paragraph(style='Heading 2')
-                        p_atual.paragraph_format.space_before = Pt(8)
-                        p_atual.paragraph_format.space_after = Pt(3)
+                spans = line["spans"]
+                for span in spans:
+                    texto_span = span["text"]
+                    if not texto_span:
+                        continue
+
+                    fonte_nome = span["font"].lower()
+                    e_bold = any(k in fonte_nome for k in ["bold", "black", "heavy"])
+                    e_italic = any(k in fonte_nome for k in ["italic", "oblique"])
+                    tamanho_pt = span["size"]
+
+                    if uri_link:
+                        adicionar_link_clicavel(p, uri_link, texto_span)
                     else:
-                        p_atual = doc_word.add_paragraph()
-                        fmt = p_atual.paragraph_format
-                        fmt.space_before = Pt(2)
-                        fmt.space_after = Pt(2)
-                        if e_bullet:
-                            fmt.left_indent = Inches(0.25)
-
-                if uri_link:
-                    adicionar_link_clicavel(p_atual, uri_link, line_str)
-                else:
-                    run = p_atual.add_run(line_str if criar_novo_p else " " + line_str)
-                    run.font.name = "Arial"
-                    run.font.size = Pt(max(9, min(24, int(tamanho_max))))
-                    
-                    # Força a cor PRETA para todos os textos/títulos
-                    run.font.color.rgb = RGBColor(0, 0, 0)
-                    run.bold = e_bold
-                    run.italic = e_italic
-
-                ultimo_y1 = y1
-                ultimo_tamanho_fonte = tamanho_max
+                        run = p.add_run(texto_span)
+                        run.font.name = "Arial"
+                        run.font.size = Pt(max(8, min(36, round(tamanho_pt))))
+                        run.font.color.rgb = RGBColor(0, 0, 0)  # Preto puro estrito
+                        run.bold = e_bold
+                        run.italic = e_italic
 
         if page_idx < len(pdf_doc) - 1:
             doc_word.add_page_break()
