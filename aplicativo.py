@@ -1,15 +1,56 @@
-import io
+import base64
+import hashlib
+import logging
 import os
-import re
+import shutil
+import signal
+# subprocess: só para o conversor.py do próprio app, sem shell
+import subprocess  # nosec B404
+import sys
 import tempfile
-import fitz  # PyMuPDF
-from docx import Document
-from docx.shared import Pt
-from pdf2docx import Converter
-from PIL import Image
-from pypdf import PdfWriter
-import pytesseract
+import threading
+import time
+import uuid
+from collections import OrderedDict, deque
+from pathlib import Path
+
+import pymupdf as fitz  # aqui só para VALIDAR o PDF (sem renderizar nada)
 import streamlit as st
+
+# ==========================================
+# Limites de proteção (memória, tempo e abuso)
+# O contêiner do Streamlit Cloud tem ~1 GB. Medido em Docker: uma conversão
+# de 2 páginas A4 no modo Cópia Fiel chega a ~430 MB (Python) + ~330 MB
+# (Tesseract). Por isso: UMA conversão por vez, num processo separado, com
+# teto de páginas, de tamanho de página, de tempo e de memória.
+# ==========================================
+APP_DIR = Path(__file__).resolve().parent
+CONVERSOR = APP_DIR / "conversor.py"
+LOGO_PATH = APP_DIR / "logo.jpeg"
+
+MAX_UPLOAD_MB = 50             # também em .streamlit/config.toml (barra no servidor)
+MAX_PAGINAS = 50
+# a 300 dpi: A3 = 17,4 MP. Pico medido (1 CPU): A3 ~510 MB, A2 ~745 MB,
+# 50 págs A4 ~580 MB. O piso de memória do Community Cloud é 690 MB.
+MAX_MEGAPIXELS_PAGINA = 18
+TIMEOUT_CONVERSAO_S = 600      # 50 págs A4 no modo Cópia Fiel: ~105 s com 1 CPU
+LIMITE_MEMORIA_MB = 750        # soma do processo de conversão + Tesseract
+CONVERSOES_SIMULTANEAS = 1
+ESPERA_NA_FILA_S = 180
+MAX_NA_FILA = 4
+LIMITE_CONVERSOES = 10         # por cliente (IP), dentro da janela abaixo
+JANELA_LIMITE_S = 600
+CACHE_MAX_MB = 64
+CACHE_TTL_S = 3600
+PREFIXO_TEMP = "pdfdoc_"
+
+log = logging.getLogger("pdf_para_doc")
+if not log.handlers:
+    _h = logging.StreamHandler(sys.stderr)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 # ==========================================
 # Configurações da Página
@@ -18,8 +59,19 @@ st.set_page_config(
     page_title="Conversor PDF p/ Docx", page_icon="📄", layout="centered"
 )
 
+
+@st.cache_resource(show_spinner=False)
+def logo_data_uri():
+    """Logo servido pelo próprio app (antes vinha do imgur: mesma imagem,
+    byte a byte). Sem dependência de terceiro para carregar a página."""
+    try:
+        return "data:image/jpeg;base64," + base64.b64encode(LOGO_PATH.read_bytes()).decode()
+    except OSError:
+        return "https://i.imgur.com/VNPhtmN.jpeg"
+
+
 # Logo do Web App e CSS/JS para Centralização
-logo_url = "https://i.imgur.com/VNPhtmN.jpeg"
+logo_url = logo_data_uri()
 st.markdown(
     f"""
     <style>
@@ -29,7 +81,7 @@ st.markdown(
             justify-content: center;
             margin-bottom: 15px;
         }}
-        
+
         /* Centralização e impedimento de quebra de linha no stRadio */
         div[data-testid="stRadio"] {{
             display: flex !important;
@@ -39,7 +91,7 @@ st.markdown(
             text-align: center !important;
             width: 100% !important;
         }}
-        
+
         div[data-testid="stRadio"] > label,
         div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {{
             text-align: center !important;
@@ -48,7 +100,7 @@ st.markdown(
             justify-content: center !important;
             white-space: nowrap !important;
         }}
-        
+
         div[data-testid="stRadio"] [role="radiogroup"] {{
             display: inline-flex !important;
             flex-direction: column !important;
@@ -66,31 +118,6 @@ st.markdown(
         }}
     </style>
 
-    <script>
-        function forcarLinhaUnicaECentralizar() {{
-            const radioContainer = window.parent.document.querySelector('div[data-testid="stRadio"]');
-            if (radioContainer) {{
-                radioContainer.style.setProperty('display', 'flex', 'important');
-                radioContainer.style.setProperty('flex-direction', 'column', 'important');
-                radioContainer.style.setProperty('align-items', 'center', 'important');
-                
-                const labels = radioContainer.querySelectorAll('label, p, span');
-                labels.forEach(el => {{
-                    el.style.setProperty('white-space', 'nowrap', 'important');
-                    el.style.setProperty('word-break', 'keep-all', 'important');
-                }});
-                
-                const group = radioContainer.querySelector('div[role="radiogroup"]');
-                if (group) {{
-                    group.style.setProperty('margin', '0 auto', 'important');
-                    group.style.setProperty('width', 'max-content', 'important');
-                }}
-            }}
-        }}
-        setTimeout(forcarLinhaUnicaECentralizar, 200);
-        setTimeout(forcarLinhaUnicaECentralizar, 600);
-    </script>
-
     <div class="centered-logo">
         <img src="{logo_url}" width="150">
     </div>
@@ -100,147 +127,329 @@ st.markdown(
 
 
 # ==========================================
-# MÓDULO 1: Cópia Fiel (Para Impressão)
+# Recursos compartilhados do processo (1 instância para todos os usuários)
 # ==========================================
-def modo_copia_fiel(pdf_file):
-    """Gera PDF intermediário com OCR e aplica pdf2docx para manter 100% da fidelidade visual."""
-    pdf_bytes = pdf_file.read()
-    doc_original = fitz.open(stream=pdf_bytes, filetype="pdf")
-    merger = PdfWriter()
+class Fila:
+    """Semáforo de conversões + contador de quem espera (fila com teto)."""
 
-    for page_num in range(len(doc_original)):
-        page = doc_original[page_num]
-        pix = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(pix.tobytes()))
+    def __init__(self, vagas, max_espera):
+        self.slots = threading.BoundedSemaphore(vagas)
+        self.max_espera = max_espera
+        self.esperando = 0
+        self.lock = threading.Lock()
 
-        pdf_ocr_bytes = pytesseract.image_to_pdf_or_hocr(
-            img, extension="pdf", lang="por"
-        )
-        merger.append(io.BytesIO(pdf_ocr_bytes))
+    def entrar_na_espera(self):
+        with self.lock:
+            if self.esperando >= self.max_espera:
+                return False
+            self.esperando += 1
+            return True
 
-    with tempfile.NamedTemporaryFile(
-        delete=False, suffix="_ocr.pdf"
-    ) as temp_ocr_pdf:
-        merger.write(temp_ocr_pdf)
-        temp_ocr_pdf_path = temp_ocr_pdf.name
+    def sair_da_espera(self):
+        with self.lock:
+            self.esperando -= 1
 
-    temp_docx_path = temp_ocr_pdf_path.replace(".pdf", ".docx")
+
+class CacheResultados:
+    """Cache em memória com TTL e teto em BYTES (não em entradas): um DOCX
+    de 50 páginas pesa muito mais que um de 1. Chave = sha256 do PDF + modo,
+    então converter o mesmo arquivo de novo devolve o mesmo resultado sem
+    custo (idempotência)."""
+
+    def __init__(self, max_bytes, ttl):
+        self.max_bytes = max_bytes
+        self.ttl = ttl
+        self.itens = OrderedDict()
+        self.total = 0
+        self.lock = threading.Lock()
+
+    def get(self, chave):
+        with self.lock:
+            item = self.itens.get(chave)
+            if item is None:
+                return None
+            criado, dados = item
+            if time.time() - criado > self.ttl:
+                self._remover(chave)
+                return None
+            self.itens.move_to_end(chave)
+            return dados
+
+    def put(self, chave, dados):
+        if len(dados) > self.max_bytes // 4:
+            return
+        with self.lock:
+            if chave in self.itens:
+                self._remover(chave)
+            self.itens[chave] = (time.time(), dados)
+            self.total += len(dados)
+            while self.total > self.max_bytes and self.itens:
+                self._remover(next(iter(self.itens)))
+
+    def _remover(self, chave):
+        _, dados = self.itens.pop(chave)
+        self.total -= len(dados)
+
+
+class LimiteDeUso:
+    """Janela deslizante por cliente: N conversões a cada X segundos.
+    Conversões servidas do cache não contam (não custam nada)."""
+
+    def __init__(self, limite, janela, max_clientes=5000):
+        self.limite = limite
+        self.janela = janela
+        self.max_clientes = max_clientes
+        self.registros = {}
+        self.lock = threading.Lock()
+
+    def permitir(self, cliente):
+        agora = time.time()
+        with self.lock:
+            if len(self.registros) > self.max_clientes:
+                self._podar(agora)
+            fila = self.registros.setdefault(cliente, deque())
+            while fila and agora - fila[0] > self.janela:
+                fila.popleft()
+            if len(fila) >= self.limite:
+                return False, int(self.janela - (agora - fila[0])) + 1
+            fila.append(agora)
+            return True, 0
+
+    def _podar(self, agora):
+        for c in [c for c, f in self.registros.items() if not f or agora - f[-1] > self.janela]:
+            del self.registros[c]
+
+
+@st.cache_resource(show_spinner=False)
+def recursos():
+    limpar_temporarios_orfaos()
+    return (
+        Fila(CONVERSOES_SIMULTANEAS, MAX_NA_FILA),
+        CacheResultados(CACHE_MAX_MB * 1024 * 1024, CACHE_TTL_S),
+        LimiteDeUso(LIMITE_CONVERSOES, JANELA_LIMITE_S),
+    )
+
+
+def limpar_temporarios_orfaos():
+    """Remove pastas pdfdoc_* com mais de 1h (de execuções que morreram no
+    meio) e PDFs/DOCX intermediários órfãos. Roda 1x por boot."""
+    corte = time.time() - 3600
+    tmp = Path(tempfile.gettempdir())
+    for padrao in (PREFIXO_TEMP + "*", "*_ocr.pdf", "*_ocr.docx"):
+        for p in tmp.glob(padrao):
+            try:
+                if p.stat().st_mtime < corte:
+                    shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink()
+            except OSError:  # sumiu ou está em uso: tenta no próximo boot
+                pass
+
+
+def identificar_cliente():
+    """IP real do visitante: no Streamlit Cloud vem no X-Forwarded-For (o
+    primeiro da lista). Sem ele, cai para a sessão."""
+    try:
+        xff = st.context.headers.get("X-Forwarded-For", "")
+        if xff:
+            return "ip:" + xff.split(",")[0].strip()
+    except Exception:  # noqa: BLE001
+        log.debug("sem X-Forwarded-For; limite por sessão", exc_info=True)
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return "sessao:" + get_script_run_ctx().session_id
+    except Exception:  # noqa: BLE001
+        return "desconhecido"
+
+
+# ==========================================
+# Validação do arquivo enviado (antes de gastar CPU/memória)
+# ==========================================
+class ArquivoRecusado(ValueError):
+    """Mensagem já pronta para o usuário."""
+
+
+def validar_pdf(dados):
+    """Confere assinatura, integridade, senha, nº de páginas e tamanho de
+    cada página (bomba de pixels). Devolve o nº de páginas."""
+    if len(dados) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise ArquivoRecusado(f"Arquivo muito grande. O máximo é {MAX_UPLOAD_MB} MB.")
+    if b"%PDF-" not in dados[:1024]:
+        raise ArquivoRecusado("Este arquivo não é um PDF válido.")
+    try:
+        doc = fitz.open(stream=dados, filetype="pdf")
+    except Exception:  # noqa: BLE001
+        raise ArquivoRecusado("Não foi possível abrir este PDF: ele parece estar danificado.")
+    try:
+        # needs_pass só para senha de ABERTURA: PDF com restrição de permissão
+        # (sem senha para abrir) converte normalmente, como sempre converteu.
+        if doc.needs_pass:
+            raise ArquivoRecusado("Este PDF está protegido por senha. Remova a senha e envie de novo.")
+        paginas = doc.page_count
+        if paginas == 0:
+            raise ArquivoRecusado("Este PDF não tem páginas.")
+        if paginas > MAX_PAGINAS:
+            raise ArquivoRecusado(
+                f"Este PDF tem {paginas} páginas. O máximo por conversão é {MAX_PAGINAS}: "
+                "divida o arquivo em partes e converta uma de cada vez."
+            )
+        for i in range(paginas):
+            r = doc[i].rect
+            mp = (r.width / 72 * 300) * (r.height / 72 * 300) / 1e6
+            if mp > MAX_MEGAPIXELS_PAGINA:
+                raise ArquivoRecusado(
+                    f"A página {i + 1} é grande demais para converter "
+                    f"({r.width / 72 * 2.54:.0f} × {r.height / 72 * 2.54:.0f} cm). "
+                    "O maior tamanho aceito é A3."
+                )
+        return paginas
+    finally:
+        doc.close()
+
+
+# ==========================================
+# Execução da conversão num processo separado (tempo e memória vigiados)
+# ==========================================
+class FalhaConversao(RuntimeError):
+    def __init__(self, motivo):
+        super().__init__(motivo)
+        self.motivo = motivo  # "tempo" | "memoria" | "ocr" | "falha"
+
+
+def _rss_do_grupo_mb(pgid):
+    """Soma a memória residente de todos os processos do grupo (conversor +
+    Tesseract). Só Linux (/proc); em outro SO devolve 0 e o teto não age."""
+    total = 0
+    pagina = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return 0
+    for d in proc.iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            stat = (d / "stat").read_text()
+            campos = stat[stat.rindex(")") + 2:].split()
+            if int(campos[2]) != pgid:  # campo 5 do stat = pgrp
+                continue
+            total += int((d / "statm").read_text().split()[1]) * pagina
+        except (OSError, ValueError, IndexError):
+            continue
+    return total // (1024 * 1024)
+
+
+def _matar(proc):
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)  # leva o Tesseract junto
+        else:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    proc.wait()
+
+
+def executar_conversor(modo, dados):
+    pasta = Path(tempfile.gettempdir()) / f"{PREFIXO_TEMP}{uuid.uuid4().hex}"
+    pasta.mkdir(parents=True)
+    try:
+        entrada, saida, erros = pasta / "entrada.pdf", pasta / "saida.docx", pasta / "erros.txt"
+        entrada.write_bytes(dados)
+        env = dict(os.environ, OMP_THREAD_LIMIT="1", TMPDIR=str(pasta))
+        with open(erros, "wb") as ferr:
+            # Sem shell; argumentos fixos: Python do app, conversor.py, modo de
+            # uma lista fechada e caminhos gerados aqui (nada vem do usuário).
+            proc = subprocess.Popen(  # nosec B603
+                [sys.executable, str(CONVERSOR), modo, str(entrada), str(saida)],
+                stdout=subprocess.DEVNULL, stderr=ferr, cwd=str(pasta), env=env,
+                start_new_session=(os.name == "posix"),
+            )
+            inicio, pico = time.time(), 0
+            while proc.poll() is None:
+                time.sleep(0.25)
+                if time.time() - inicio > TIMEOUT_CONVERSAO_S:
+                    _matar(proc)
+                    raise FalhaConversao("tempo")
+                if os.name == "posix":
+                    pico = max(pico, _rss_do_grupo_mb(proc.pid))
+                    if pico > LIMITE_MEMORIA_MB:
+                        _matar(proc)
+                        raise FalhaConversao("memoria")
+        if proc.returncode == 4:
+            raise FalhaConversao("ocr")
+        if proc.returncode != 0 or not saida.is_file():
+            detalhe = erros.read_text(errors="replace")[-600:]
+            log.error("conversor saiu com %s: %s", proc.returncode, detalhe)
+            raise FalhaConversao("falha")
+        log.info("convertido modo=%s em %.1fs pico=%sMB", modo, time.time() - inicio, pico)
+        return saida.read_bytes()
+    finally:
+        shutil.rmtree(pasta, ignore_errors=True)
+
+
+MENSAGENS_FALHA = {
+    "tempo": "A conversão passou do tempo limite. Tente um PDF com menos páginas.",
+    "memoria": "Este PDF exige mais memória do que o servidor tem disponível. "
+               "Tente dividir o arquivo em partes menores.",
+    "ocr": "O servidor está sobrecarregado no momento. Tente novamente em instantes.",
+    "falha": "Não foi possível converter este arquivo. Ele pode estar danificado; "
+             "tente novamente ou use outro PDF.",
+}
+
+
+def converter(dados, modo):
+    """Valida, aplica cache, limite de uso e fila; devolve os bytes do DOCX
+    ou None (a mensagem ao usuário já foi exibida)."""
+    fila, cache, limite = recursos()
+    chave = hashlib.sha256(dados).hexdigest() + ":" + modo
+    em_cache = cache.get(chave)
+    if em_cache is not None:
+        return em_cache
 
     try:
-        cv = Converter(temp_ocr_pdf_path)
-        cv.convert(temp_docx_path, start=0, end=None)
-        cv.close()
+        paginas = validar_pdf(dados)
+    except ArquivoRecusado as e:
+        st.error(str(e))
+        return None
 
-        with open(temp_docx_path, "rb") as f:
-            return f.read()
+    ok, espera = limite.permitir(identificar_cliente())
+    if not ok:
+        st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")
+        log.warning("limite de uso atingido")
+        return None
+
+    if not fila.slots.acquire(blocking=False):
+        if not fila.entrar_na_espera():
+            st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
+            log.warning("fila cheia")
+            return None
+        try:
+            with st.spinner("Na fila: outro arquivo está sendo convertido..."):
+                conseguiu = fila.slots.acquire(timeout=ESPERA_NA_FILA_S)
+        finally:
+            fila.sair_da_espera()
+        if not conseguiu:
+            st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
+            return None
+
+    try:
+        log.info("convertendo modo=%s paginas=%s bytes=%s", modo, paginas, len(dados))
+        with st.spinner("Convertendo arquivo..."):
+            docx_bytes = executar_conversor(modo, dados)
+            # Grava no cache ANTES de sair do spinner: se o usuário mexeu na
+            # tela durante a conversão, o Streamlit interrompe o script na
+            # próxima chamada st.* e o resultado seria jogado fora.
+            cache.put(chave, docx_bytes)
+    except FalhaConversao as e:
+        log.warning("falha de conversao: %s", e.motivo)
+        st.error(MENSAGENS_FALHA[e.motivo])
+        return None
+    except Exception:  # noqa: BLE001 — nunca mostrar detalhe interno ao usuário
+        log.exception("erro inesperado na conversao")
+        st.error(MENSAGENS_FALHA["falha"])
+        return None
     finally:
-        if os.path.exists(temp_ocr_pdf_path):
-            os.remove(temp_ocr_pdf_path)
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
+        fila.slots.release()
 
-
-# ==========================================
-# MÓDULO 2: Texto Editável (Limpeza de Artefatos)
-# ==========================================
-def limpar_linha(texto_linha):
-    """Filtra lixo de navegação e remove caracteres/números parasitas que aparecem antes das frases devido a ícones."""
-    if not texto_linha:
-        return None
-
-    l_lower = texto_linha.lower().strip()
-
-    blacklist = ["firefox", "about:blank", "lofl", "1 of 1"]
-    if any(termo in l_lower for termo in blacklist):
-        return None
-
-    # Remove marcadores e caracteres estranhos
-    texto_limpo = re.sub(
-        r"^\s*[\(\[\{]?\d+[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])", "", texto_linha
-    )
-    texto_limpo = re.sub(
-        r"^\s*[\(\[\{]?[A-Za-z0-9]{1,2}[\)\]\}]?\s+(?=[A-Za-zÀ-ÿ])",
-        "",
-        texto_limpo,
-    )
-    texto_limpo = re.sub(r"^\s*[^a-zA-Z0-9À-ÿ]+\s*(?=[A-Za-zÀ-ÿ])", "", texto_limpo)
-
-    return texto_limpo.strip() if texto_limpo.strip() else None
-
-
-def modo_texto_editavel(pdf_file):
-    """Extrai texto e coordenadas via OCR, limpa artefatos e constrói parágrafos nativos no Word."""
-    doc_word = Document()
-    pdf_bytes = pdf_file.read()
-    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    for page_num in range(len(pdf_document)):
-        page = pdf_document[page_num]
-        pix = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(pix.tobytes()))
-
-        data = pytesseract.image_to_data(
-            img, lang="por", output_type=pytesseract.Output.DICT
-        )
-
-        linhas = {}
-        num_items = len(data["text"])
-
-        for i in range(num_items):
-            texto = data["text"][i].strip()
-            confianca = int(data["conf"][i])
-
-            if confianca > 30 and texto:
-                block_num = data["block_num"][i]
-                line_num = data["line_num"][i]
-                chave_linha = (block_num, line_num)
-
-                top = data["top"][i]
-                height = data["height"][i]
-
-                if chave_linha not in linhas:
-                    linhas[chave_linha] = {
-                        "palavras": [],
-                        "top": top,
-                        "heights": [],
-                    }
-
-                linhas[chave_linha]["palavras"].append(texto)
-                linhas[chave_linha]["heights"].append(height)
-
-        linhas_ordenadas = sorted(linhas.values(), key=lambda x: x["top"])
-
-        for item in linhas_ordenadas:
-            texto_bruto = " ".join(item["palavras"])
-            texto_linha = limpar_linha(texto_bruto)
-
-            if not texto_linha:
-                continue
-
-            altura_media_px = sum(item["heights"]) / len(item["heights"])
-            tamanho_fonte_pt = max(9, min(26, int(altura_media_px / 3.8)))
-
-            p = doc_word.add_paragraph()
-            run = p.add_run(texto_linha)
-            run.font.name = "Arial"
-            run.font.size = Pt(tamanho_fonte_pt)
-
-            if (
-                tamanho_fonte_pt >= 14
-                or texto_linha.isdigit()
-                or "Protocolo" in texto_linha
-            ):
-                run.bold = True
-
-            p.paragraph_format.space_after = Pt(4)
-
-        if page_num < len(pdf_document) - 1:
-            doc_word.add_page_break()
-
-    docx_buffer = io.BytesIO()
-    doc_word.save(docx_buffer)
-    docx_buffer.seek(0)
-    return docx_buffer.read()
+    return docx_bytes
 
 
 # ==========================================
@@ -282,30 +491,27 @@ def main():
 
         # Processamento, Alerta e Botão de Download dentro da coluna de 50%
         if pdf_file:
-            with st.spinner("Convertendo arquivo..."):
-                try:
-                    pdf_file.seek(0)
+            if "Cópia Fiel" in modo:
+                chave_modo, nome_sufixo = "fiel", "copia_fiel"
+            else:
+                chave_modo, nome_sufixo = "editavel", "editavel"
 
-                    if "Cópia Fiel" in modo:
-                        docx_bytes = modo_copia_fiel(pdf_file)
-                        nome_sufixo = "copia_fiel"
-                    else:
-                        docx_bytes = modo_texto_editavel(pdf_file)
-                        nome_sufixo = "editavel"
+            docx_bytes = converter(pdf_file.getvalue(), chave_modo)
+            if docx_bytes is None:
+                return
 
-                    st.success(
-                        "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
-                    )
+            st.success(
+                "Arquivo convertido com sucesso! Você pode baixar o arquivo Docx abaixo."
+            )
 
-                    st.download_button(
-                        label="Baixar Docx",
-                        data=docx_bytes,
-                        file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                    )
-                except Exception as e:
-                    st.error(f"Erro ao converter o arquivo: {e}")
+            st.download_button(
+                label="Baixar Docx",
+                data=docx_bytes,
+                file_name=f"{pdf_file.name.replace('.pdf', '')}_{nome_sufixo}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                on_click="ignore",  # baixar não reexecuta o app
+            )
 
 
 if __name__ == "__main__":

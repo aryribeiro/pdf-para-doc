@@ -1,0 +1,14 @@
+# Espelho do Streamlit Cloud: Debian trixie, Python 3.13 e os pacotes do
+# packages.txt instalados por apt (tesseract-ocr + idioma por).
+# Uso: docker build -f tests/Dockerfile.smoke -t pdf-doc-smoke . \
+#      && docker run --rm pdf-doc-smoke
+FROM python:3.13-slim-trixie
+WORKDIR /app
+COPY packages.txt .
+RUN apt-get update \
+ && sed 's/\r$//' packages.txt | xargs apt-get install -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pytest
+COPY . .
+CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]

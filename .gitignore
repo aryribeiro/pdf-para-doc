@@ -1,2 +1,9 @@
 old.py
 old.txt
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.playwright-mcp/
+.venv/
+.env
+.streamlit/secrets.toml

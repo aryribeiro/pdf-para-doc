@@ -1,0 +1,14 @@
+[server]
+# Barra o upload no próprio servidor, antes de chegar ao código (MB).
+maxUploadSize = 50
+# Já são o padrão; ficam explícitos para ninguém desligar sem perceber.
+enableXsrfProtection = true
+enableCORS = true
+
+[client]
+# Nunca mostrar traceback, tipo ou mensagem de exceção ao visitante.
+showErrorDetails = "none"
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

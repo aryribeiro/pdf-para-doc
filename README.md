@@ -3,43 +3,56 @@ Obs.: caso o app esteja no modo "sleeping" (dormindo) ao entrar, basta clicar no
 
 ## Conversor PDF para DOCX
 
-Este é um web app desenvolvido com **Streamlit** que permite converter arquivos PDF em arquivos DOCX. O app utiliza a biblioteca **PyPDF2** para extrair texto de PDFs e **python-docx** para gerar arquivos DOCX a partir do texto extraído.
+App no ar: https://pdf-para-doc.streamlit.app/
 
-## Funcionalidade
+Web app em **Streamlit** que converte PDF em DOCX (Word), em dois modos:
 
-- Carregar um arquivo PDF.
-- Extrair o texto do PDF.
-- Converter o texto extraído em um arquivo DOCX.
-- Baixar o arquivo DOCX gerado.
+- **Cópia Fiel (Para Impressão)**: cada página passa por OCR (Tesseract, português) e vira um PDF pesquisável, que o **pdf2docx** transforma em DOCX com o layout da página.
+- **Texto Editável**: o OCR lê as linhas de cada página e o **python-docx** monta parágrafos nativos do Word, sem imagens.
 
-## Tecnologias Usadas
+## Limites e proteções
 
-- **Streamlit**: Para construir a interface do usuário.
-- **PyPDF2**: Para ler e extrair texto de arquivos PDF.
-- **python-docx**: Para gerar documentos DOCX a partir do texto extraído.
+O servidor gratuito do Streamlit Community Cloud tem pouca memória. Para o app não cair:
 
-## Instalação
+- **Uma conversão por vez**, com fila de espera (até 4 pessoas). Quem passa disso recebe "servidor ocupado".
+- A conversão roda num **processo separado** (`conversor.py`), com teto de **10 minutos** e de **750 MB** de memória. Se passar disso, o processo é encerrado e a pessoa recebe um aviso. O app continua no ar e libera toda a memória da conversão ao final.
+- O arquivo é conferido antes de converter. Recusa: arquivo que não é PDF, PDF danificado ou com senha, mais de **50 páginas**, página maior que **A3** e arquivo acima de **50 MB**.
+- Cada visitante (IP) pode fazer até **10 conversões a cada 10 minutos**.
+- O mesmo arquivo no mesmo modo é convertido uma vez só e fica guardado por 1 hora, em até 64 MB de memória.
+- Nenhum detalhe interno de erro aparece na tela. Os erros vão para o log do servidor, sem o nome do arquivo.
+
+## Tecnologias
+
+Streamlit, PyMuPDF, pdf2docx, python-docx, pytesseract (Tesseract OCR), Pillow, pypdf. As versões estão fixadas no `requirements.txt` e são atualizadas pelo Dependabot.
+
+## Instalação local
 
 1. Clone o repositório:
     ```bash
     git clone https://github.com/aryribeiro/pdf-para-doc.git
     ```
-
-2. Instale as dependências:
+2. Instale o Tesseract com o idioma português (no Debian/Ubuntu: `apt install tesseract-ocr tesseract-ocr-por`).
+3. Instale as dependências:
     ```bash
     pip install -r requirements.txt
     ```
-
-## Como Usar
-
-1. Execute o aplicativo Streamlit:
+4. Execute:
     ```bash
-    streamlit run app.py
+    streamlit run aplicativo.py
     ```
 
-2. Acesse o aplicativo na URL fornecida pelo Streamlit no seu terminal.
-   
-3. Envie um arquivo PDF para converter em DOCX.
+Para implantar no Streamlit Community Cloud, escolha **Python 3.13** em *Advanced settings*.
+
+## Testes
+
+A bancada roda num contêiner que imita o Streamlit Cloud (Debian, Python 3.13, Tesseract e 1 GB de memória). Ela confere que o DOCX gerado é idêntico, parte por parte, ao da versão anterior às proteções. Também testa a validação, o cache, o limite de uso e os tetos de tempo e de memória:
+
+```bash
+docker build -f tests/Dockerfile.smoke -t pdf-doc-smoke .
+docker run --rm --memory=1g pdf-doc-smoke
+```
+
+O GitHub Actions roda a mesma bancada, o `pip-audit` (vulnerabilidades nas dependências) e o `bandit` (análise do código) a cada push e toda segunda-feira.
 
 ## Contato
 
