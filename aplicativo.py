@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import ipaddress
 import logging
 import os
 import shutil
@@ -245,14 +246,22 @@ def limpar_temporarios_orfaos():
 
 
 def identificar_cliente():
-    """IP real do visitante: no Streamlit Cloud vem no X-Forwarded-For (o
-    primeiro da lista). Sem ele, cai para a sessão."""
+    """Usa o IP do X-Forwarded-For SÓ se for público. Medido em produção
+    (11/07/2026): o proxy do Streamlit Cloud entrega apenas IPs internos
+    (ex.: "192.168.0.119, 10.13.215.3"), compartilhados por visitantes
+    diferentes; limitar por eles bloquearia um usuário pelo uso de outro.
+    Sem IP público, a chave é a sessão."""
     try:
-        xff = st.context.headers.get("X-Forwarded-For", "")
-        if xff:
-            return "ip:" + xff.split(",")[0].strip()
+        for parte in st.context.headers.get("X-Forwarded-For", "").split(","):
+            try:
+                ip = ipaddress.ip_address(parte.strip())
+            except ValueError:
+                continue
+            ip = getattr(ip, "ipv4_mapped", None) or ip
+            if ip.is_global:
+                return "ip:" + str(ip)
     except Exception:  # noqa: BLE001
-        log.debug("sem X-Forwarded-For; limite por sessão", exc_info=True)
+        log.debug("sem X-Forwarded-For legível; limite por sessão", exc_info=True)
     return id_sessao()
 
 
@@ -414,10 +423,12 @@ def converter(dados, modo):
         st.error(str(e))
         return None
 
-    # O 1º IP do X-Forwarded-For pode ser forjado pelo cliente; por isso o
-    # limite vale também por sessão. Memória, tempo e concorrência não
-    # dependem de identificar o visitante.
-    for cliente in {identificar_cliente(), id_sessao()}:
+    # IP público (se o proxy entregar) e sessão; o IP do cabeçalho pode ser
+    # forjado, por isso a sessão conta sempre. Memória, tempo e concorrência
+    # não dependem de identificar o visitante.
+    cliente_ip = identificar_cliente()
+    log.info("limite por %s", "ip+sessao" if cliente_ip.startswith("ip:") else "sessao")
+    for cliente in {cliente_ip, id_sessao()}:
         ok, espera = limite.permitir(cliente)
         if not ok:
             st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")

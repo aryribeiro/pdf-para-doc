@@ -95,6 +95,21 @@ def test_limite_de_uso_por_cliente():
     assert lim.permitir("ip:2")[0] is True
 
 
+@pytest.mark.parametrize("xff, esperado", [
+    ("192.168.0.119, 10.13.215.3", "sessao"),       # o que o Cloud entrega (medido)
+    ("::ffff:127.0.0.1", "sessao"),
+    ("", "sessao"),
+    ("lixo, 10.0.0.1", "sessao"),
+    ("200.150.10.20, 10.13.215.3", "ip:200.150.10.20"),
+    ("::ffff:200.150.10.20", "ip:200.150.10.20"),
+])
+def test_cliente_so_por_ip_publico(monkeypatch, xff, esperado):
+    from types import SimpleNamespace
+    monkeypatch.setattr(app.st, "context", SimpleNamespace(headers={"X-Forwarded-For": xff}))
+    monkeypatch.setattr(app, "id_sessao", lambda: "sessao")
+    assert app.identificar_cliente() == esperado
+
+
 def test_fila_com_teto():
     f = app.Fila(vagas=1, max_espera=2)
     assert f.entrar_na_espera() and f.entrar_na_espera()
