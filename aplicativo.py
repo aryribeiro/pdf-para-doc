@@ -253,6 +253,10 @@ def identificar_cliente():
             return "ip:" + xff.split(",")[0].strip()
     except Exception:  # noqa: BLE001
         log.debug("sem X-Forwarded-For; limite por sessão", exc_info=True)
+    return id_sessao()
+
+
+def id_sessao():
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
         return "sessao:" + get_script_run_ctx().session_id
@@ -410,27 +414,35 @@ def converter(dados, modo):
         st.error(str(e))
         return None
 
-    ok, espera = limite.permitir(identificar_cliente())
-    if not ok:
-        st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")
-        log.warning("limite de uso atingido")
-        return None
-
-    if not fila.slots.acquire(blocking=False):
-        if not fila.entrar_na_espera():
-            st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
-            log.warning("fila cheia")
-            return None
-        try:
-            with st.spinner("Na fila: outro arquivo está sendo convertido..."):
-                conseguiu = fila.slots.acquire(timeout=ESPERA_NA_FILA_S)
-        finally:
-            fila.sair_da_espera()
-        if not conseguiu:
-            st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
+    # O 1º IP do X-Forwarded-For pode ser forjado pelo cliente; por isso o
+    # limite vale também por sessão. Memória, tempo e concorrência não
+    # dependem de identificar o visitante.
+    for cliente in {identificar_cliente(), id_sessao()}:
+        ok, espera = limite.permitir(cliente)
+        if not ok:
+            st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")
+            log.warning("limite de uso atingido")
             return None
 
+    # A vaga é devolvida num finally que cobre TAMBÉM a espera na fila: o
+    # Streamlit pode interromper o script na saída do spinner (o usuário
+    # mexeu na tela) logo depois de a vaga ter sido obtida.
+    adquirido = fila.slots.acquire(blocking=False)
     try:
+        if not adquirido:
+            if not fila.entrar_na_espera():
+                st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
+                log.warning("fila cheia")
+                return None
+            try:
+                with st.spinner("Na fila: outro arquivo está sendo convertido..."):
+                    adquirido = fila.slots.acquire(timeout=ESPERA_NA_FILA_S)
+            finally:
+                fila.sair_da_espera()
+            if not adquirido:
+                st.warning("O servidor está ocupado agora. Tente novamente em alguns minutos.")
+                return None
+
         log.info("convertendo modo=%s paginas=%s bytes=%s", modo, paginas, len(dados))
         with st.spinner("Convertendo arquivo..."):
             docx_bytes = executar_conversor(modo, dados)
@@ -447,7 +459,8 @@ def converter(dados, modo):
         st.error(MENSAGENS_FALHA["falha"])
         return None
     finally:
-        fila.slots.release()
+        if adquirido:
+            fila.slots.release()
 
     return docx_bytes
 

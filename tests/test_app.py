@@ -103,6 +103,34 @@ def test_fila_com_teto():
     assert f.entrar_na_espera() is True
 
 
+def test_vaga_volta_se_o_streamlit_interromper_na_fila(monkeypatch):
+    """O Streamlit interrompe o script (BaseException) na saída do spinner
+    quando o usuário mexe na tela. Se isso acontecer logo depois de a vaga
+    ter sido obtida, ela tem de voltar; senão o app fica 'ocupado' para sempre."""
+    import contextlib
+    import threading
+
+    class Interrompido(BaseException):
+        pass
+
+    fila = app.Fila(vagas=1, max_espera=4)
+    monkeypatch.setattr(app, "recursos", lambda: (
+        fila, app.CacheResultados(10**6, 60), app.LimiteDeUso(100, 60)))
+
+    @contextlib.contextmanager
+    def spinner_que_interrompe(_texto):
+        yield
+        raise Interrompido()
+
+    monkeypatch.setattr(app.st, "spinner", spinner_que_interrompe)
+    assert fila.slots.acquire(blocking=False)              # outra pessoa convertendo
+    threading.Timer(0.3, fila.slots.release).start()       # ... e termina logo
+    with pytest.raises(Interrompido):
+        app.converter((FIX / "digital.pdf").read_bytes(), "editavel")
+    assert fila.slots.acquire(blocking=False), "a vaga vazou"
+    assert fila.esperando == 0
+
+
 # ---------------------------------------------------------------- tetos do processo
 posix = pytest.mark.skipif(os.name != "posix", reason="vigia de memória usa /proc")
 
