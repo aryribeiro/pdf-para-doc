@@ -95,19 +95,18 @@ def test_limite_de_uso_por_cliente():
     assert lim.permitir("ip:2")[0] is True
 
 
-@pytest.mark.parametrize("xff, esperado", [
-    ("192.168.0.119, 10.13.215.3", "sessao"),       # o que o Cloud entrega (medido)
-    ("::ffff:127.0.0.1", "sessao"),
-    ("", "sessao"),
-    ("lixo, 10.0.0.1", "sessao"),
-    ("200.150.10.20, 10.13.215.3", "ip:200.150.10.20"),
-    ("::ffff:200.150.10.20", "ip:200.150.10.20"),
-])
-def test_cliente_so_por_ip_publico(monkeypatch, xff, esperado):
+def test_limite_ignora_ip_forjado_no_cabecalho(monkeypatch):
+    """Um IP no X-Forwarded-For (escrito pelo cliente) não pode gastar o
+    limite de outra pessoa: a chave é só a sessão."""
     from types import SimpleNamespace
-    monkeypatch.setattr(app.st, "context", SimpleNamespace(headers={"X-Forwarded-For": xff}))
-    monkeypatch.setattr(app, "id_sessao", lambda: "sessao")
-    assert app.identificar_cliente() == esperado
+    lim = app.LimiteDeUso(limite=1, janela=60)
+    monkeypatch.setattr(app, "recursos", lambda: (
+        app.Fila(1, 4), app.CacheResultados(10**6, 60), lim))
+    monkeypatch.setattr(app.st, "context", SimpleNamespace(headers={"X-Forwarded-For": "200.150.10.20"}))
+    monkeypatch.setattr(app, "id_sessao", lambda: "sessao:atacante")
+    assert app.converter((FIX / "digital.pdf").read_bytes(), "editavel") is not None
+    assert "ip:200.150.10.20" not in lim.registros
+    assert list(lim.registros) == ["sessao:atacante"]
 
 
 def test_fila_com_teto():

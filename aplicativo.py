@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import ipaddress
 import logging
 import os
 import shutil
@@ -39,7 +38,7 @@ LIMITE_MEMORIA_MB = 750        # soma do processo de conversão + Tesseract
 CONVERSOES_SIMULTANEAS = 1
 ESPERA_NA_FILA_S = 180
 MAX_NA_FILA = 4
-LIMITE_CONVERSOES = 10         # por cliente (IP), dentro da janela abaixo
+LIMITE_CONVERSOES = 10         # por sessão, dentro da janela abaixo
 JANELA_LIMITE_S = 600
 CACHE_MAX_MB = 64
 CACHE_TTL_S = 3600
@@ -245,27 +244,12 @@ def limpar_temporarios_orfaos():
                 pass
 
 
-def identificar_cliente():
-    """Usa o IP do X-Forwarded-For SÓ se for público. Medido em produção
-    (11/07/2026): o proxy do Streamlit Cloud entrega apenas IPs internos
-    (ex.: "192.168.0.119, 10.13.215.3"), compartilhados por visitantes
-    diferentes; limitar por eles bloquearia um usuário pelo uso de outro.
-    Sem IP público, a chave é a sessão."""
-    try:
-        for parte in st.context.headers.get("X-Forwarded-For", "").split(","):
-            try:
-                ip = ipaddress.ip_address(parte.strip())
-            except ValueError:
-                continue
-            ip = getattr(ip, "ipv4_mapped", None) or ip
-            if ip.is_global:
-                return "ip:" + str(ip)
-    except Exception:  # noqa: BLE001
-        log.debug("sem X-Forwarded-For legível; limite por sessão", exc_info=True)
-    return id_sessao()
-
-
 def id_sessao():
+    """Chave do limite de uso. Por que NÃO o IP: o proxy do Streamlit Cloud
+    só entrega IPs internos no X-Forwarded-For (medido em 11/07/2026:
+    "192.168.0.119, 10.13.215.3"), compartilhados por visitantes diferentes;
+    um IP público ali, ou capturado pelo navegador (ipify), é escrito pelo
+    próprio cliente e deixaria um atacante gastar o limite de outra pessoa."""
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
         return "sessao:" + get_script_run_ctx().session_id
@@ -423,17 +407,13 @@ def converter(dados, modo):
         st.error(str(e))
         return None
 
-    # IP público (se o proxy entregar) e sessão; o IP do cabeçalho pode ser
-    # forjado, por isso a sessão conta sempre. Memória, tempo e concorrência
-    # não dependem de identificar o visitante.
-    cliente_ip = identificar_cliente()
-    log.info("limite por %s", "ip+sessao" if cliente_ip.startswith("ip:") else "sessao")
-    for cliente in {cliente_ip, id_sessao()}:
-        ok, espera = limite.permitir(cliente)
-        if not ok:
-            st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")
-            log.warning("limite de uso atingido")
-            return None
+    # Limite por sessão (ver id_sessao). Memória, tempo e concorrência não
+    # dependem de identificar o visitante: a fila protege o servidor.
+    ok, espera = limite.permitir(id_sessao())
+    if not ok:
+        st.warning(f"Você atingiu o limite de conversões. Tente de novo em {max(1, espera // 60)} min.")
+        log.warning("limite de uso atingido")
+        return None
 
     # A vaga é devolvida num finally que cobre TAMBÉM a espera na fila: o
     # Streamlit pode interromper o script na saída do spinner (o usuário

@@ -17,7 +17,7 @@ O servidor gratuito do Streamlit Community Cloud tem pouca memória. Para o app 
 - **Uma conversão por vez**, com fila de espera (até 4 pessoas). Quem passa disso recebe "servidor ocupado".
 - A conversão roda num **processo separado** (`conversor.py`), com teto de **10 minutos** e de **750 MB** de memória. Se passar disso, o processo é encerrado e a pessoa recebe um aviso. O app continua no ar e libera toda a memória da conversão ao final.
 - O arquivo é conferido antes de converter. Recusa: arquivo que não é PDF, PDF danificado ou com senha, mais de **50 páginas**, página maior que **A3** e arquivo acima de **50 MB**.
-- Cada visitante (IP) pode fazer até **10 conversões a cada 10 minutos**.
+- Cada sessão pode fazer até **10 conversões a cada 10 minutos**. O limite não usa o IP: no Streamlit Cloud o IP público não chega ao app, e um IP enviado pelo próprio navegador poderia ser forjado para bloquear outra pessoa.
 - O mesmo arquivo no mesmo modo é convertido uma vez só e fica guardado por 1 hora, em até 64 MB de memória.
 - Nenhum detalhe interno de erro aparece na tela. Os erros vão para o log do servidor, sem o nome do arquivo.
 
